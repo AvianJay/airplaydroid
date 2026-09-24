@@ -3,12 +3,16 @@ package tw.avianjay.airplaydroid.protocol.devtools
 import tw.avianjay.airplaydroid.protocol.Endpoint
 import tw.avianjay.airplaydroid.protocol.http.SocketAirPlayConnection
 import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
+import java.io.File
 
 /**
- * On-device pairing probe, run with app_process so it sits on the receiver's LAN:
+ * Pairing probe for a JVM on the receiver's network:
  *
- *   app_process -cp /data/local/tmp/probe.dex / \
- *     tw.avianjay.airplaydroid.protocol.devtools.PairProbe <host> <port> <mode> <password>
+ *   PairProbe <host> <port> transient <password>
+ *   PairProbe <host> <port> persistent <password> [credentials-file]
+ *
+ * Persistent mode runs M1 -> M6 and, given a file, writes the credentials to it
+ * as `key=hex` lines. That file holds a private key: keep it out of the repo.
  *
  * One attempt per run on purpose: repeated failures trigger the receiver's
  * pair-setup backoff.
@@ -16,21 +20,39 @@ import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
 object PairProbe {
     @JvmStatic
     fun main(args: Array<String>) {
-        require(args.size == 4) { "usage: PairProbe <host> <port> <transient|persistent> <password>" }
-        val (host, port, modeArg, password) = args
-        val mode = when (modeArg) {
-            "transient" -> HomeKitPairing.Mode.TRANSIENT
-            "persistent" -> HomeKitPairing.Mode.PERSISTENT
-            else -> error("unknown mode $modeArg")
+        require(args.size in 4..5) {
+            "usage: PairProbe <host> <port> <transient|persistent> <password> [credentials-file]"
         }
+        val (host, port, mode, password) = args
 
         SocketAirPlayConnection(Endpoint(host, port.toInt())).use { connection ->
+            val pairing = HomeKitPairing(connection)
             try {
-                val k = HomeKitPairing(connection).pairSetup(mode, password)
-                println("M4 OK: SRP proof verified, K=${k.size} bytes")
+                when (mode) {
+                    "transient" -> {
+                        val k = pairing.pairSetup(HomeKitPairing.Mode.TRANSIENT, password)
+                        println("M4 OK: SRP proof verified, K=${k.size} bytes")
+                    }
+                    "persistent" -> {
+                        val c = pairing.pair(password)
+                        println("M6 OK: receiver id=${String(c.receiverId)} ltpk=${c.receiverPublicKey.hex()}")
+                        args.getOrNull(4)?.let { path ->
+                            File(path).writeText(
+                                "clientId=${c.clientId}\n" +
+                                    "clientSeed=${c.clientSeed.hex()}\n" +
+                                    "receiverId=${c.receiverId.hex()}\n" +
+                                    "receiverPublicKey=${c.receiverPublicKey.hex()}\n"
+                            )
+                            println("credentials written to $path")
+                        }
+                    }
+                    else -> error("unknown mode $mode")
+                }
             } catch (e: HomeKitPairing.Failure) {
                 println("FAILED: ${e.message}")
             }
         }
     }
+
+    private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 }

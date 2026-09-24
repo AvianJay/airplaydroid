@@ -54,6 +54,70 @@ class HomeKitPairing(
         class Rejected(val error: Tlv8.PairError) : Failure("receiver returned ${error.name}")
         class Malformed(val detail: String) : Failure("malformed pairing response: $detail")
         class ProofMismatch : Failure("the receiver's proof did not verify")
+        class SignatureMismatch : Failure("the receiver's M6 signature did not verify")
+    }
+
+    /**
+     * The outcome of a persistent pairing. Persist all of it: pair-verify needs
+     * our long-term key to sign with, and the receiver's to check its signature.
+     */
+    class Credentials(
+        val clientId: String,
+        /** 32-byte Ed25519 seed. Secret. */
+        val clientSeed: ByteArray,
+        val receiverId: ByteArray,
+        /** The receiver's 32-byte Ed25519 long-term public key. */
+        val receiverPublicKey: ByteArray,
+    )
+
+    /**
+     * Persistent pair-setup, M1 -> M6. After the SRP half, each side proves it
+     * holds an Ed25519 long-term key by signing a value derived from `K`, and the
+     * two public keys are exchanged under ChaCha20-Poly1305 keyed from `K`.
+     *
+     * [password] is the device password for a receiver with `flags` bit 7, or
+     * the on-screen PIN for one with bit 9.
+     */
+    fun pair(password: String): Credentials {
+        val k = pairSetup(Mode.PERSISTENT, password)
+        val longTerm = HapCrypto.Ed25519KeyPair.generate()
+        val encryptKey = HapCrypto.hkdf("Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info", k)
+
+        val controllerX = HapCrypto.hkdf("Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info", k)
+        val id = clientId.toByteArray()
+        val subTlv = Tlv8.encode(
+            Tlv8.IDENTIFIER to id,
+            Tlv8.PUBLIC_KEY to longTerm.publicKey,
+            Tlv8.SIGNATURE to longTerm.sign(controllerX + id + longTerm.publicKey),
+        )
+
+        val m6 = exchange(
+            Mode.PERSISTENT,
+            cseq = 2,
+            body = Tlv8.encode(
+                Tlv8.STATE to Tlv8.byte(5),
+                Tlv8.ENCRYPTED_DATA to HapCrypto.seal(encryptKey, HapCrypto.labelNonce("PS-Msg05"), subTlv),
+            ),
+        )
+
+        val sealed = m6[Tlv8.ENCRYPTED_DATA] ?: throw Failure.Malformed("M6 carried no encrypted data")
+        val plain = try {
+            HapCrypto.open(encryptKey, HapCrypto.labelNonce("PS-Msg06"), sealed)
+        } catch (e: org.bouncycastle.crypto.InvalidCipherTextException) {
+            throw Failure.Malformed("M6 did not decrypt: ${e.message}")
+        }
+        val accessory = Tlv8.decode(plain)
+        val receiverId = accessory[Tlv8.IDENTIFIER] ?: throw Failure.Malformed("M6 carried no identifier")
+        val receiverKey = accessory[Tlv8.PUBLIC_KEY] ?: throw Failure.Malformed("M6 carried no public key")
+        val signature = accessory[Tlv8.SIGNATURE] ?: throw Failure.Malformed("M6 carried no signature")
+
+        // pyatv skips this check; pair_ap does it, and so do we.
+        val accessoryX = HapCrypto.hkdf("Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info", k)
+        if (!HapCrypto.ed25519Verify(receiverKey, accessoryX + receiverId + receiverKey, signature)) {
+            throw Failure.SignatureMismatch()
+        }
+
+        return Credentials(clientId, longTerm.seed, receiverId, receiverKey)
     }
 
     /**
