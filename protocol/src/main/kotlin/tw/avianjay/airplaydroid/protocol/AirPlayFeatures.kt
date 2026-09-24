@@ -99,6 +99,17 @@ value class AirPlayFeatures(val raw: ULong) {
      */
     val isAirPlay2: Boolean get() = supportsUnifiedMediaControl || supportsCoreUtilsPairing
 
+    /**
+     * Whether the receiver offers any HomeKit-style pairing (system, HomeKit or
+     * CoreUtils). Screen mirroring without FairPlay rests on it: the video key is
+     * derived from the pairing. A receiver that mirrors but offers none of these
+     * -- the AirPlay 1 generation, e.g. third-party boxes advertising
+     * `srcvers=220.68` as an AppleTV3,x -- takes the video key only wrapped in
+     * FairPlay (`/fp-setup` + `ekey`), which only Apple's own devices can do.
+     */
+    val supportsHapPairing: Boolean
+        get() = supportsSystemPairing || supportsHomeKitPairing || supportsCoreUtilsPairing
+
     val isEmpty: Boolean get() = raw == 0uL
 
     override fun toString(): String = "AirPlayFeatures(0x" + raw.toString(16).uppercase() + ")"

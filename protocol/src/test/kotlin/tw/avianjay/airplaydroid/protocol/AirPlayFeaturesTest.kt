@@ -149,4 +149,18 @@ class StatusFlagsTest {
         assertEquals(StatusFlags.NONE, StatusFlags.parse("nonsense"))
         assertTrue(StatusFlags.parse("0x0").isEmpty)
     }
+
+    @Test
+    fun `HAP pairing separates mirror-capable receivers we can reach from FairPlay-only ones`() {
+        // Real feature words, as advertised on the test network.
+        val appleTv4k = AirPlayFeatures.parse("0x4A7FDFD5,0x3C177FDE") // tvOS 26.6
+        val miraAir = AirPlayFeatures.parse("0x5A7FFFF6,0x1E")        // srcvers 220.68, "AppleTV3,2"
+        val eShare = AirPlayFeatures.parse("0x527FFFF7,0x1E")
+
+        assertTrue(appleTv4k.supportsScreenMirroring && appleTv4k.supportsHapPairing)
+        for (legacy in listOf(miraAir, eShare)) {
+            assertTrue(legacy.supportsScreenMirroring)
+            assertTrue(!legacy.supportsHapPairing)
+        }
+    }
 }

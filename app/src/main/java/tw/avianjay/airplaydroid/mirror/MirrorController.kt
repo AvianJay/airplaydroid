@@ -65,6 +65,12 @@ object MirrorController {
         if (!txt.features.supportsScreenMirroring) return "${device.displayName} does not accept screen mirroring."
         if (txt.pairingBlocked) return "${device.displayName} only allows devices from its own Home."
         if (device.videoEndpoint == null) return "No address for ${device.displayName} yet."
+        if (!txt.features.supportsHapPairing) {
+            // Probed on hardware: such a receiver answers /info but closes the
+            // connection on a mirroring SETUP that carries no FairPlay key.
+            return "${device.displayName} uses the older AirPlay mirroring, which needs Apple's FairPlay. " +
+                "iPhones, iPads and Macs can mirror to it; this app cannot."
+        }
         if (hasSavedPairing) return null
         if (txt.flags.pairingRequired) {
             return "Mirroring to a receiver that shows a PIN is not supported yet. " +
