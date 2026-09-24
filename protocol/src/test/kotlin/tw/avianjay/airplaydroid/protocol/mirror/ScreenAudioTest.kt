@@ -158,17 +158,26 @@ class ScreenAudioTest {
     }
 
     @Test
-    fun `receiver clock slews toward the least-delayed sample, boundedly`() {
+    fun `receiver clock jumps up to a better sample and only creeps down`() {
+        // Anchored on a reply that was delayed 200 ms (Wi-Fi power save).
         val clock = ReceiverClock(receiverMs = 1_000, localNanos = 0)
         assertEquals(1_000_000_000L, clock.receiverNanos(0))
 
-        // A reply that says the receiver is 10 ms further ahead than thought.
-        clock.observe(receiverMs = 2_010, localNanos = 1_000_000_000)
-        assertEquals(1_000_000_000L + 1_000_000_000L + ReceiverClock.MAX_SLEW_NANOS, clock.receiverNanos(1_000_000_000))
+        // An undelayed reply shows the receiver 200 ms further ahead: taken at once,
+        // since every sample is a lower bound.
+        clock.observe(receiverMs = 2_200, localNanos = 1_000_000_000)
+        assertEquals(2_200_000_000L, clock.receiverNanos(1_000_000_000))
 
-        // A late (delayed) reply does not pull it back while a better sample is in the window.
-        clock.observe(receiverMs = 3_000, localNanos = 2_000_000_000)
-        assertTrue(clock.receiverNanos(2_000_000_000) > 3_000_000_000L)
+        // A delayed reply does not pull it back while the better sample is in the window.
+        clock.observe(receiverMs = 3_050, localNanos = 2_000_000_000)
+        assertEquals(3_200_000_000L, clock.receiverNanos(2_000_000_000))
+
+        // Once only lower samples remain (the receiver clock really runs slower),
+        // it follows them down by at most MAX_SLEW_NANOS per sample.
+        repeat(8) { clock.observe(receiverMs = 3_100 + it * 1_000L, localNanos = 2_000_000_000 + it * 1_000_000_000L) }
+        val before = clock.receiverNanos(0)
+        clock.observe(receiverMs = 11_100, localNanos = 10_000_000_000)
+        assertTrue(before - clock.receiverNanos(0) in 0..ReceiverClock.MAX_SLEW_NANOS)
     }
 
     @Test

@@ -28,7 +28,10 @@ import kotlin.concurrent.thread
  * streaming apps) stay on the phone. The phone keeps playing the sound too --
  * no public API mutes it.
  */
-class AudioCapture private constructor(private val record: AudioRecord) {
+class AudioCapture private constructor(
+    private val record: AudioRecord,
+    private val onStopped: (String) -> Unit,
+) {
 
     @Volatile private var session: MirrorSession? = null
     @Volatile private var running = true
@@ -44,34 +47,45 @@ class AudioCapture private constructor(private val record: AudioRecord) {
         val pcm = ShortArray(spf * 2)
         val timestamp = AudioTimestamp()
         var framesRead = 0L
+        // One (frame position, nanoTime) anchor, refreshed whenever the HAL
+        // reports a timestamp and extrapolated between reports. Mixing HAL
+        // timestamps with a read-time fallback would make capture times jump
+        // by the buffer's depth each time the source switched.
+        var anchorFrame = Long.MIN_VALUE
+        var anchorNanos = 0L
         try {
             while (running) {
                 var filled = 0
                 while (filled < pcm.size && running) {
                     val n = record.read(pcm, filled, pcm.size - filled, AudioRecord.READ_BLOCKING)
                     if (n < 0) {
-                        Log.w(TAG, "AudioRecord.read failed: $n")
+                        // Dead object (audioserver restarted) or the capture policy
+                        // went away. Video carries on; say why the sound stopped.
+                        if (running) onStopped("AudioRecord.read returned $n")
                         return
                     }
                     filled += n
                 }
                 if (!running) break
                 framesRead += spf
+                if (record.getTimestamp(timestamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
+                    anchorFrame = timestamp.framePosition
+                    anchorNanos = timestamp.nanoTime
+                } else if (anchorFrame == Long.MIN_VALUE) {
+                    // No HAL timestamp yet: assume the frame just read ended now.
+                    anchorFrame = framesRead
+                    anchorNanos = System.nanoTime()
+                }
                 val target = session ?: continue
 
                 // When the first sample of this frame was captured, on the
                 // System.nanoTime() clock the session maps to the receiver.
                 val first = framesRead - spf
-                val captureNanos =
-                    if (record.getTimestamp(timestamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
-                        timestamp.nanoTime + (first - timestamp.framePosition) * 1_000_000_000L / SAMPLE_RATE
-                    } else {
-                        System.nanoTime() - spf * 1_000_000_000L / SAMPLE_RATE
-                    }
-                target.sendAudio(pcm, captureNanos)
+                target.sendAudio(pcm, anchorNanos + (first - anchorFrame) * 1_000_000_000L / SAMPLE_RATE)
             }
         } catch (e: Exception) {
             Log.w(TAG, "audio capture stopped", e)
+            if (running) onStopped("capture failed: $e")
         }
     }
 
@@ -93,7 +107,7 @@ class AudioCapture private constructor(private val record: AudioRecord) {
          */
         @RequiresApi(Build.VERSION_CODES.Q)
         @SuppressLint("MissingPermission") // checked by the caller; a denial throws and is caught
-        fun start(projection: MediaProjection): AudioCapture? = try {
+        fun start(projection: MediaProjection, onStopped: (String) -> Unit): AudioCapture? = try {
             val config = AudioPlaybackCaptureConfiguration.Builder(projection)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -116,7 +130,7 @@ class AudioCapture private constructor(private val record: AudioRecord) {
                 Log.w(TAG, "playback capture did not start")
                 null
             } else {
-                AudioCapture(record)
+                AudioCapture(record, onStopped)
             }
         } catch (e: Exception) {
             Log.w(TAG, "playback capture unavailable", e)

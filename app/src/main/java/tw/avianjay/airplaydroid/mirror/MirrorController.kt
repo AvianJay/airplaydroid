@@ -63,9 +63,20 @@ object MirrorController {
         return null
     }
 
-    fun request(device: AirPlayDevice, password: String?) {
-        pendingPassword = password
-        _state.value = MirrorUiState(device = device, phase = MirrorUiState.Phase.AwaitingConsent)
+    /**
+     * Starts a mirroring request, or returns false if one is already under way:
+     * a second request would orphan the running session behind a new UI state.
+     */
+    fun request(device: AirPlayDevice, password: String?): Boolean {
+        var accepted = false
+        _state.update {
+            if (it.active) it else {
+                accepted = true
+                MirrorUiState(device = device, phase = MirrorUiState.Phase.AwaitingConsent)
+            }
+        }
+        if (accepted) pendingPassword = password
+        return accepted
     }
 
     /** The result of the screen-capture consent prompt. */
@@ -93,8 +104,13 @@ object MirrorController {
 
     internal fun takePassword(): String? = pendingPassword.also { pendingPassword = null }
 
+    /**
+     * Progress from the service. Ignored once the session has ended: the setup
+     * worker can report a phase after finish() already moved the state to Idle,
+     * and that late update must not resurrect a session nothing is running.
+     */
     internal fun setPhase(phase: MirrorUiState.Phase) {
-        _state.update { it.copy(phase = phase, error = null) }
+        _state.update { if (it.phase == MirrorUiState.Phase.Idle) it else it.copy(phase = phase, error = null) }
     }
 
     internal fun ended(error: String?) {

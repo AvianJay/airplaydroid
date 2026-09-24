@@ -99,6 +99,7 @@ class MirrorSession private constructor(
     private var nonce = 0L
     private var lastTimestamp = 0L
     private var pendingConfig: ByteArray? = null
+    @Volatile private var firstFrameSent = false
 
     val isOpen: Boolean get() = !closed.get()
 
@@ -117,6 +118,9 @@ class MirrorSession private constructor(
         }
         thread(isDaemon = true, name = "mirror-heartbeat") {
             val header = ByteArray(HEADER_SIZE).also { it[4] = 0x02; it[6] = 0x1e }
+            // Real senders start heartbeats only once video flows; a heartbeat
+            // ahead of the first codec packet is a shape receivers never see.
+            while (isOpen && !firstFrameSent) sleepQuietly(50)
             while (isOpen) {
                 try {
                     synchronized(writeLock) { out.write(header); out.flush() }
@@ -194,6 +198,7 @@ class MirrorSession private constructor(
             out.write(header)
             out.write(HapCrypto.seal(videoKey, nonceBytes, avcc, header))
             out.flush()
+            firstFrameSent = true
         }
     }
 
@@ -458,6 +463,9 @@ class MirrorSession private constructor(
                 val setup = BinaryPlist.decode(first.body) as? PDict
                     ?: throw Failure.Malformed("control SETUP reply is not a dictionary")
                 val clock = ReceiverClock(ReceiverClock.receiverMsOf(first::header) ?: 0L, firstAt)
+                // Every later reply is another clock sample; the least delayed one wins.
+                fun observe(reply: AirPlayResponse) =
+                    ReceiverClock.receiverMsOf(reply::header)?.let { clock.observe(it, System.nanoTime()) }
                 val clockId = ((setup.entries["timingPeerInfo"] as? PDict)?.entries?.get("ClockID") as? PInt)?.value ?: 0L
 
                 (setup.entries["eventPort"] as? PInt)?.value?.toInt()?.let { port ->
@@ -470,6 +478,7 @@ class MirrorSession private constructor(
                         extra = listOf("Range" to "npt=0-", "RTP-Info" to "seq=0;rtptime=0"),
                     )
                     if (!record.isSuccess) throw Failure.Refused("RECORD", record.status)
+                    observe(record)
                 }
                 // The display box and formats arrive in updateInfo, right after RECORD.
                 events?.awaitInfo(1_500)
@@ -519,6 +528,7 @@ class MirrorSession private constructor(
                     ),
                 )
                 if (!video.isSuccess) throw Failure.Refused("screen stream SETUP", video.status)
+                observe(video)
                 val dataPort = (((BinaryPlist.decode(video.body) as? PDict)?.entries?.get("streams") as? PArray)
                     ?.values?.firstOrNull() as? PDict)?.entries?.get("dataPort") as? PInt
                     ?: throw Failure.Malformed("screen stream SETUP carried no dataPort")
@@ -529,8 +539,10 @@ class MirrorSession private constructor(
                 }
 
                 if (audio != null) {
-                    // 0 dB, i.e. full scale. Real senders send it twice.
-                    repeat(2) { runCatching { requester.request("SET_PARAMETER", controlUri, text = "volume: 0.000000\r\n") } }
+                    // 0 dB, i.e. full scale. Real senders send it twice. A refusal
+                    // is harmless, but an exception is not caught: it means the
+                    // control connection is gone, and the session with it.
+                    repeat(2) { observe(requester.request("SET_PARAMETER", controlUri, text = "volume: 0.000000\r\n")) }
                 }
 
                 val videoKey = HapCrypto.hkdf(

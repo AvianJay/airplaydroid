@@ -12,11 +12,17 @@ package tw.avianjay.airplaydroid.protocol.mirror
  * delay and by up to 1 ms of truncation. The first sample (the control SETUP
  * reply) anchors the mapping.
  *
- * The two clocks drift apart by tens of ppm, which over an hour is enough to
- * eat the playout lead. So later samples (from each `/feedback` reply) are kept
- * in a sliding window, and the offset slews toward the window's maximum -- the
- * sample with the least network delay -- by at most [MAX_SLEW_NANOS] per update.
- * The bound keeps one delayed reply from moving the picture or the sound.
+ * Every sample is therefore a *lower bound* on the true offset. Later samples
+ * (every RTSP reply during setup, then each `/feedback` reply) are kept in a
+ * sliding window, and the offset follows the window's maximum -- the sample
+ * with the least network delay:
+ *
+ *  - upward at once: a higher sample can only be closer to the truth, and a
+ *    first sample delayed by Wi-Fi power save (100-300 ms is common) would
+ *    otherwise eat the playout lead for minutes;
+ *  - downward by at most [MAX_SLEW_NANOS] per update, which is only needed to
+ *    follow a receiver clock that runs slower than ours (tens of ppm) and
+ *    keeps a burst of delayed replies from moving the picture or the sound.
  */
 class ReceiverClock(receiverMs: Long, localNanos: Long) {
 
@@ -32,13 +38,12 @@ class ReceiverClock(receiverMs: Long, localNanos: Long) {
         window.addLast(receiverMs * 1_000_000 - localNanos)
         while (window.size > WINDOW) window.removeFirst()
         val target = window.max()
-        val delta = (target - offsetNanos).coerceIn(-MAX_SLEW_NANOS, MAX_SLEW_NANOS)
-        offsetNanos += delta
+        offsetNanos += if (target > offsetNanos) target - offsetNanos else maxOf(target - offsetNanos, -MAX_SLEW_NANOS)
     }
 
     companion object {
         private const val WINDOW = 8
-        /** 2 ms per /feedback (every 2 s) = 1000 ppm, far above any crystal's drift. */
+        /** Downward: 2 ms per /feedback (every 2 s) = 1000 ppm, far above any crystal's drift. */
         const val MAX_SLEW_NANOS = 2_000_000L
 
         /** Reads the receiver timestamp headers of a reply, or null if absent. */

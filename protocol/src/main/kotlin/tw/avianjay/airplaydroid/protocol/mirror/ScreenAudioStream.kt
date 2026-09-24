@@ -85,6 +85,11 @@ internal class ScreenAudioStream(
                 if (gap > MAX_GAP_NANOS) {
                     rtp = (rtp + gap * SAMPLE_RATE / 1_000_000_000L) and 0xFFFFFFFFL
                     lastSyncNanos = Long.MIN_VALUE // re-announce the mapping now
+                } else if (gap < -MAX_GAP_NANOS) {
+                    // Capture time stepped back (the source re-anchored). The RTP
+                    // timeline cannot go back, but the announced mapping must
+                    // follow, or the interval check below would stall for as long.
+                    lastSyncNanos = Long.MIN_VALUE
                 }
             }
             expectedCaptureNanos = captureNanos + FRAME_NANOS

@@ -91,7 +91,10 @@ class MainActivity : ComponentActivity() {
                     mirrorRefusalFor = { MirrorController.refusalFor(it, pairings.has(it.key)) },
                     hasSavedPairing = { pairings.has(it.key) },
                     onMirror = { device, password ->
-                        MirrorController.request(device, password)
+                        if (!MirrorController.request(device, password)) {
+                            PlaybackController.reportRefusal("Already mirroring. Stop the current session first.")
+                            return@DevicePickerScreen
+                        }
                         val audioGranted = ContextCompat.checkSelfPermission(
                             this, Manifest.permission.RECORD_AUDIO,
                         ) == PackageManager.PERMISSION_GRANTED

@@ -143,7 +143,7 @@ fun DevicePickerScreen(
         PlayUrlDialog(
             device = device,
             canPlay = VideoHandoff.refusalFor(device) == null,
-            mirrorRefusal = mirrorRefusalFor(device),
+            mirrorRefusal = if (mirror.active) "Already mirroring to ${mirror.device?.displayName}." else mirrorRefusalFor(device),
             hasSavedPairing = hasSavedPairing(device),
             onDismiss = { pendingDevice = null },
             onConfirm = { url, password ->

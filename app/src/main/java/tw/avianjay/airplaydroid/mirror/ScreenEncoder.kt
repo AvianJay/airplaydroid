@@ -43,26 +43,33 @@ class ScreenEncoder(
     private var display: VirtualDisplay? = null
     @Volatile private var running = false
 
+    /** Throws if the encoder or the display cannot be created; nothing is left allocated then. */
     fun start() {
         codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         try {
-            codec.configure(format(withBaselineProfile = true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        } catch (e: Exception) {
-            // Some encoders reject an explicit profile; their default is fine.
-            Log.w(TAG, "encoder rejected the baseline profile, using its default", e)
-            codec.reset()
-            codec.configure(format(withBaselineProfile = false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        }
-        inputSurface = codec.createInputSurface()
-        codec.start()
-        running = true
+            try {
+                codec.configure(format(withBaselineProfile = true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            } catch (e: Exception) {
+                // Some encoders reject an explicit profile; their default is fine.
+                Log.w(TAG, "encoder rejected the baseline profile, using its default", e)
+                codec.reset()
+                codec.configure(format(withBaselineProfile = false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            }
+            inputSurface = codec.createInputSurface()
+            codec.start()
+            running = true
 
-        display = projection.createVirtualDisplay(
-            "AirPlayDroid-mirror",
-            width, height, densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            inputSurface, null, null,
-        )
+            // Throws if the projection was stopped meanwhile.
+            display = projection.createVirtualDisplay(
+                "AirPlayDroid-mirror",
+                width, height, densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                inputSurface, null, null,
+            )
+        } catch (t: Throwable) {
+            stop()
+            throw t
+        }
         thread(name = "mirror-encoder-drain") { drain() }
     }
 
@@ -142,15 +149,24 @@ class ScreenEncoder(
         }
     }
 
+    /** Decided on the first frame: does this encoder's PTS use the System.nanoTime() base? */
+    private var ptsIsMonotonic: Boolean? = null
+
     /**
      * A surface encoder's presentation time is when the VirtualDisplay produced
      * the frame, on the System.nanoTime() clock -- the capture time audio uses
-     * too, so the two stay in sync. Guarded in case an encoder rebases it.
+     * too, so the two stay in sync. In case an encoder rebases it, the first
+     * frame decides once whether to trust it; switching per frame between PTS
+     * and "now" would bunch frames onto one timestamp.
      */
     private fun captureNanos(presentationTimeUs: Long): Long {
         val now = System.nanoTime()
         val pts = presentationTimeUs * 1_000
-        return if (pts in now - 1_000_000_000L..now) pts else now
+        val monotonic = ptsIsMonotonic ?: (pts in now - 1_000_000_000L..now).also {
+            ptsIsMonotonic = it
+            Log.i(TAG, "encoder timestamps are ${if (it) "capture times" else "not monotonic; using send time"}")
+        }
+        return if (monotonic) pts else now
     }
 
     fun stop() {
