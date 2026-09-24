@@ -58,14 +58,19 @@ object PairProbe {
         }
     }
 
-    private fun verify(host: String, port: Int, file: File) {
+    /** Reads a credentials file written by persistent mode. */
+    fun readCredentials(file: File): HomeKitPairing.Credentials {
         val fields = file.readLines().filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
-        val credentials = HomeKitPairing.Credentials(
+        return HomeKitPairing.Credentials(
             clientId = fields.getValue("clientId"),
             clientSeed = fields.getValue("clientSeed").unhex(),
             receiverId = fields.getValue("receiverId").unhex(),
             receiverPublicKey = fields.getValue("receiverPublicKey").unhex(),
         )
+    }
+
+    private fun verify(host: String, port: Int, file: File) {
+        val credentials = readCredentials(file)
 
         SocketAirPlayConnection(Endpoint(host, port)).use { connection ->
             try {
