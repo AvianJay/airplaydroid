@@ -22,7 +22,7 @@ sealed interface DiscoveryEvent {
 
 /**
  * The swap seam. The only implementation today is [NsdDeviceDiscovery]; keeping
- * the interface means the ViewModel and UI never learn about NsdManager.
+ * the interface means the repository and UI never learn about NsdManager.
  */
 interface DeviceDiscovery {
     fun events(): Flow<DiscoveryEvent>
@@ -31,11 +31,9 @@ interface DeviceDiscovery {
 /** What the picker renders. */
 data class DiscoveryUiState(
     val devices: List<AirPlayDevice> = emptyList(),
+    /** Types whose NSD browse is running in the current round. */
     val scanning: Set<AirPlayServiceType> = emptySet(),
-    val counts: Map<AirPlayServiceType, Int> = emptyMap(),
     val lastError: String? = null,
 ) {
     val isScanning: Boolean get() = scanning.isNotEmpty()
-
-    fun countOf(type: AirPlayServiceType): Int = counts[type] ?: 0
 }

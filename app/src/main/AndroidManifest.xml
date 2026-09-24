@@ -11,13 +11,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
-    <!-- PROTECTION_NORMAL, granted at install. Declaring it is what satisfies the
-         runtime prerequisite for the connectedDevice foreground service type, so
-         the service starts with zero runtime prompts. -->
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <!-- Screen mirroring: the capture itself is gated by the per-session consent
          prompt, which is what satisfies this type's runtime prerequisite. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -26,8 +20,9 @@
          context; a denial only means mirroring without sound. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- The only runtime permission in milestone 1. Requested in context; a denial
-         hides the notification but never blocks discovery. -->
+    <!-- Only the mirroring notification (and its Stop action) uses it. Requested on
+         first launch; a denial hides that notification but never blocks discovery
+         or mirroring. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Declared required=false so the Play Console does not implicitly filter the
@@ -56,17 +51,10 @@
             </intent-filter>
         </activity>
 
-        <!-- Owns the NsdManager lifecycle so the device list survives activity
-             recreation. connectedDevice is chosen over dataSync (6h/24h cap) and
-             mediaProjection (needs capture consent before startForeground). -->
-        <service
-            android:name=".service.AirPlaySessionService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
-
-        <!-- Screen mirroring. Separate from the discovery service because a
-             MediaProjection can only be obtained from a service already in the
-             foreground as mediaProjection, entered after capture consent. -->
+        <!-- Screen mirroring. A MediaProjection can only be obtained from a service
+             already in the foreground as mediaProjection, entered after capture
+             consent. Discovery has no service: it runs only while the picker is
+             on screen. -->
         <service
             android:name=".service.MirrorService"
             android:exported="false"

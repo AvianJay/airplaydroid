@@ -19,6 +19,14 @@ data class MirrorUiState(
     val active: Boolean get() = phase != Phase.Idle
 }
 
+/** What tapping a device in the picker should do; decided without I/O. */
+sealed interface MirrorTap {
+    data class Refused(val message: String) : MirrorTap
+    data class Busy(val current: AirPlayDevice) : MirrorTap
+    data object AskPassword : MirrorTap
+    data object Start : MirrorTap
+}
+
 /**
  * Screen-mirroring state, process-scoped like the playback controller so it
  * outlives activity recreation. The work itself runs in [MirrorService]: a
@@ -47,7 +55,13 @@ object MirrorController {
      * (transient pairing), needs a pairing flow that has not been built yet.
      */
     fun refusalFor(device: AirPlayDevice, hasSavedPairing: Boolean): String? {
-        val txt = device.airPlayTxt ?: return "${device.displayName} has not been fully resolved yet."
+        val txt = device.airPlayTxt ?: return when {
+            // An AirPort Express and similar speakers advertise only _raop._tcp:
+            // their _airplay._tcp record is not late, it never comes.
+            device.raopTxt?.features?.supportsScreenMirroring == false ->
+                "${device.displayName} does not accept screen mirroring."
+            else -> "${device.displayName} has not been fully resolved yet."
+        }
         if (!txt.features.supportsScreenMirroring) return "${device.displayName} does not accept screen mirroring."
         if (txt.pairingBlocked) return "${device.displayName} only allows devices from its own Home."
         if (device.videoEndpoint == null) return "No address for ${device.displayName} yet."
@@ -61,6 +75,23 @@ object MirrorController {
                 "(Settings > AirPlay > Require Password)."
         }
         return null
+    }
+
+    /**
+     * What a tap on [device] should do, given its saved pairing and the session
+     * the screen is currently drawing ([mirror] is passed in rather than read
+     * from [state] so the decision matches what the user sees).
+     *
+     * A refusal wins over [MirrorTap.Busy]: it is a fact about the device that
+     * stays true after stopping, so "stop the current session first" would send
+     * the user off for nothing. A password is asked for only when the receiver
+     * wants one and none is saved -- a saved pairing alone does not carry Digest.
+     */
+    fun tapActionFor(device: AirPlayDevice, saved: PairingStore.Summary?, mirror: MirrorUiState): MirrorTap {
+        refusalFor(device, saved != null)?.let { return MirrorTap.Refused(it) }
+        if (mirror.active) return MirrorTap.Busy(mirror.device ?: device)
+        if (device.airPlayTxt?.passwordRequired == true && saved?.hasPassword != true) return MirrorTap.AskPassword
+        return MirrorTap.Start
     }
 
     /**

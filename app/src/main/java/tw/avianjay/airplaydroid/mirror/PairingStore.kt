@@ -1,6 +1,10 @@
 package tw.avianjay.airplaydroid.mirror
 
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
 import java.io.File
 
@@ -18,6 +22,9 @@ class PairingStore(context: Context) {
 
     class Entry(val credentials: HomeKitPairing.Credentials, val password: String?)
 
+    /** What the picker may know about a pairing, never the secrets. */
+    data class Summary(val hasPassword: Boolean)
+
     private val dir = File(context.noBackupFilesDir, "pairings")
 
     fun load(deviceKey: String): Entry? {
@@ -32,6 +39,13 @@ class PairingStore(context: Context) {
         }.getOrNull()
     }
 
+    /**
+     * Null when there is no usable pairing. Goes through [load] rather than a
+     * file-exists check so a corrupt file reads as "not paired" -- which is also
+     * what MirrorService concludes, before pairing again over it.
+     */
+    fun summary(deviceKey: String): Summary? = load(deviceKey)?.let { Summary(it.password != null) }
+
     fun save(deviceKey: String, entry: Entry) {
         dir.mkdirs()
         val text = entry.credentials.encode() +
@@ -42,13 +56,23 @@ class PairingStore(context: Context) {
             tmp.copyTo(fileFor(deviceKey), overwrite = true)
             tmp.delete()
         }
+        _revision.update { it + 1 }
+    }
+
+    /**
+     * Keeps the pairing but drops the password, for when the receiver rejected
+     * it: the next tap then asks for the current one instead of failing with the
+     * stale one every time.
+     */
+    fun clearPassword(deviceKey: String) {
+        val entry = load(deviceKey) ?: return
+        if (entry.password != null) save(deviceKey, Entry(entry.credentials, null))
     }
 
     fun forget(deviceKey: String) {
         fileFor(deviceKey).delete()
+        _revision.update { it + 1 }
     }
-
-    fun has(deviceKey: String): Boolean = fileFor(deviceKey).isFile
 
     private fun fileFor(deviceKey: String) =
         File(dir, deviceKey.replace(Regex("[^A-Za-z0-9]"), "_") + ".creds")
@@ -59,7 +83,16 @@ class PairingStore(context: Context) {
     private fun hexDecode(s: String) =
         String(ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() })
 
-    private companion object {
-        const val PASSWORD_PREFIX = "password="
+    companion object {
+        private const val PASSWORD_PREFIX = "password="
+
+        private val _revision = MutableStateFlow(0)
+
+        /**
+         * Bumped on every write, so the picker re-reads what it shows instead of
+         * polling the disk. Process-wide rather than per instance: MirrorService
+         * writes through its own store.
+         */
+        val revision: StateFlow<Int> = _revision.asStateFlow()
     }
 }

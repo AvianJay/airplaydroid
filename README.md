@@ -29,6 +29,9 @@ Verified against that Apple TV ("Require Password" on) from an OPPO Reno6 5G
 (CPH2251) on Android 13, and confirmed by eye and ear on the TV: the picture
 shows, rotation works, and the sound plays.
 
+In the app, tapping a device starts mirroring. A password-protected receiver asks
+for its AirPlay password once, the first time.
+
 ### The session, end to end
 
 | Step | What happens |
@@ -101,7 +104,11 @@ matters because a MediaProjection may create only one VirtualDisplay.
   it; turn the phone's volume down.
 - **Password storage:** the password is stored alongside the pairing in app-private,
   no-backup storage, because Digest needs it on every session. It is not
-  encrypted beyond what the OS provides.
+  encrypted beyond what the OS provides. A newly typed password is saved only
+  after the receiver accepts it. If the receiver later rejects the saved one, the
+  app drops it but keeps the pairing, and the next tap asks again.
+- **Forget pairing** (in a device's ⋮ menu) deletes only this phone's copy. No
+  pair-remove is sent, so the Apple TV keeps this phone in its paired list.
 
 ### Diagnostics
 
@@ -118,7 +125,7 @@ against real hardware without a phone.
 
 ## Video-URL handoff (AirPlay 1)
 
-Tapping a device and entering a URL drives `POST /play`, `POST /rate`,
+**Play video URL…** in a device's ⋮ menu drives `POST /play`, `POST /rate`,
 `GET /playback-info` and `POST /stop`. The receiver fetches the URL itself; the
 phone never carries pixels. A receiver with `flags` bit 7 answers `401` with
 `WWW-Authenticate: Digest realm="airplay"`, and an ordinary RFC 2617 Digest
@@ -193,7 +200,8 @@ AGP 9 ships **built-in Kotlin**: `org.jetbrains.kotlin.android` must not be appl
   - `http/`: RTSP/HTTP codec, HAP-encrypted framing, and Digest.
   - `mirror/`: `MirrorSession`, `ScreenAudioStream`, `ReceiverClock`, `AlacVerbatim`
     and the H.264 helpers.
-- **`:app`**: Compose UI, `NsdManager` discovery, and the mirroring pipeline. The
+- **`:app`**: Compose UI, `NsdManager` discovery (only while the device list is on
+  screen; there is no background discovery service), and the mirroring pipeline. The
   pipeline is `MirrorService`, a mediaProjection foreground service, which runs
   `ScreenEncoder` (VirtualDisplay → MediaCodec) and `AudioCapture`
   (AudioPlaybackCapture). Pairings are kept in `PairingStore`.

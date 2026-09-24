@@ -65,7 +65,6 @@ dependencies {
     // androidx.core:core, NOT core-ktx (empty artifact from 1.19.0 onwards).
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.lifecycle.service)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.kotlinx.coroutines.android)
 

@@ -34,10 +34,12 @@ import java.util.concurrent.Executors
  * Runs one screen-mirroring session: MediaProjection -> [ScreenEncoder] ->
  * [MirrorSession].
  *
- * Its own service, separate from [AirPlaySessionService], because the
- * foreground type differs: from Android 14 a MediaProjection can only be
- * obtained by a service already in the foreground as `mediaProjection`, and
- * that type may only be entered after the user granted capture consent.
+ * A foreground service of type `mediaProjection` because from Android 14 a
+ * MediaProjection can only be obtained by a service already in the foreground
+ * as that type, and that type may only be entered after the user granted
+ * capture consent. It is also the only thing keeping the process alive while
+ * mirroring from the background: discovery stops once the picker leaves the
+ * screen.
  */
 class MirrorService : Service() {
 
@@ -123,24 +125,23 @@ class MirrorService : Service() {
             ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
         val store = PairingStore(this)
         try {
-            var saved = store.load(device.key)
+            val saved = store.load(device.key)
             val password = typedPassword?.takeIf { it.isNotEmpty() } ?: saved?.password
 
-            if (saved == null) {
+            var entry = saved ?: run {
                 if (password == null) {
                     return finish("${device.displayName} needs its AirPlay password to pair.", why = "no password")
                 }
                 MirrorController.setPhase(Phase.Pairing)
-                saved = PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
-                store.save(device.key, saved)
-            } else if (password != saved.password) {
-                saved = PairingStore.Entry(saved.credentials, password)
-                store.save(device.key, saved)
+                // pair-setup uses the password as its SRP secret, so a completed
+                // pairing has proven the password too; saving both now is safe.
+                PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
+                    .also { store.save(device.key, it) }
             }
 
             MirrorController.setPhase(Phase.Connecting)
             val opened = try {
-                open(device, saved.credentials, password)
+                open(device, entry.credentials, password)
             } catch (e: HomeKitPairing.Failure) {
                 // The receiver no longer knows us (reset, or pairing removed in
                 // its settings). Pair again once, if we can.
@@ -148,10 +149,21 @@ class MirrorService : Service() {
                 store.forget(device.key)
                 if (password == null) throw e
                 MirrorController.setPhase(Phase.Pairing)
-                val fresh = PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
-                store.save(device.key, fresh)
+                entry = PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
+                store.save(device.key, entry)
                 MirrorController.setPhase(Phase.Connecting)
-                open(device, fresh.credentials, password)
+                open(device, entry.credentials, password)
+            }
+            // Only now is a typed password known to be right: a password-protected
+            // receiver answers control SETUP with 401 until Digest carries the
+            // right one, and open() throws on that. Saving it any earlier let a
+            // typo replace a good password, and with one-tap mirroring every
+            // later tap would then have failed with it.
+            // A failed write must not throw past `opened`, which is not adopted
+            // yet and so would never be closed; it only means asking again.
+            if (password != entry.password) {
+                runCatching { store.save(device.key, PairingStore.Entry(entry.credentials, password)) }
+                    .onFailure { Log.w(TAG, "could not save the accepted password", it) }
             }
             val adopted = synchronized(lock) { if (stopping) false else { session = opened; true } }
             if (!adopted) {
@@ -186,17 +198,35 @@ class MirrorService : Service() {
             MirrorController.setPhase(Phase.Mirroring)
         } catch (e: MirrorSession.Failure.Refused) {
             Log.w(TAG, "mirroring refused", e)
+            if (e.status == 401) {
+                // pair-verify runs before any SETUP, so a 401 means the pairing is
+                // still good and only the password is not (changed on the TV).
+                // Drop the password, keep the pairing: the next tap asks for it.
+                store.clearPassword(device.key)
+            }
             finish(
-                if (e.status == 401) "${device.displayName} did not accept that password."
-                else "${device.displayName} refused mirroring (${e.message}).",
+                when {
+                    e.status != 401 -> "${device.displayName} refused mirroring (${e.message})."
+                    !typedPassword.isNullOrEmpty() -> getString(R.string.mirror_error_password_rejected, device.displayName)
+                    else -> getString(R.string.mirror_error_saved_password_rejected, device.displayName)
+                },
                 why = "refused: ${e.message}",
             )
         } catch (e: HomeKitPairing.Failure) {
             Log.w(TAG, "pairing failed", e)
+            // Nothing to clean up: pair-setup saves only on success, and the
+            // re-pair path forgot the old pairing before trying -- so the next
+            // tap finds no pairing and asks for the password.
+            val rejected = e is HomeKitPairing.Failure.Rejected &&
+                e.error == tw.avianjay.airplaydroid.protocol.pairing.Tlv8.PairError.AUTHENTICATION
             finish(
-                if (e is HomeKitPairing.Failure.Rejected && e.error == tw.avianjay.airplaydroid.protocol.pairing.Tlv8.PairError.AUTHENTICATION)
-                    "${device.displayName} did not accept that password."
-                else "Could not pair with ${device.displayName}: ${e.message}",
+                when {
+                    !rejected -> "Could not pair with ${device.displayName}: ${e.message}"
+                    // The re-pair after a failed pair-verify runs on the saved
+                    // password when nothing was typed.
+                    typedPassword.isNullOrEmpty() -> getString(R.string.mirror_error_saved_password_rejected, device.displayName)
+                    else -> getString(R.string.mirror_error_password_rejected, device.displayName)
+                },
                 why = "pairing: ${e.message}",
             )
         } catch (e: Exception) {

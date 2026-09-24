@@ -2,16 +2,17 @@
 <resources>
     <string name="app_name">AirPlayDroid</string>
 
-    <string name="discovery_channel_name">Device discovery</string>
-    <string name="discovery_channel_description">Shown while AirPlayDroid is looking for AirPlay receivers on your network.</string>
-    <string name="discovery_notification_title">Looking for AirPlay devices</string>
-    <string name="discovery_notification_text">Scanning the local network</string>
-    <string name="discovery_notification_stop">Stop</string>
-
     <string name="picker_title">AirPlay devices</string>
     <string name="picker_scanning">Scanning the local network…</string>
     <string name="picker_empty_title">No AirPlay devices found yet</string>
     <string name="picker_empty_body">Make sure this phone and the receiver are on the same Wi-Fi network. Some routers block mDNS between wireless and wired clients.</string>
+    <string name="picker_browsing">Browsing %1$s</string>
+
+    <string name="device_resolving">Resolving…</string>
+    <string name="device_status_mirroring">Mirroring</string>
+    <string name="device_status_paired">Paired</string>
+    <string name="device_status_cannot_mirror">Can\'t mirror</string>
+    <string name="device_menu_description">More options for %1$s</string>
 
     <string name="play_dialog_title">Play on %1$s</string>
     <string name="play_dialog_url_label">Video URL</string>
@@ -19,14 +20,21 @@
     <string name="play_dialog_pin_label">PIN shown on the TV</string>
     <string name="play_dialog_hint">A direct link to a video file or an HLS (.m3u8) stream. The receiver fetches it itself — this phone does not relay the video.</string>
     <string name="action_play">Play</string>
+    <string name="action_play_url">Play video URL…</string>
     <string name="action_pause">Pause</string>
     <string name="action_resume">Resume</string>
     <string name="action_stop">Stop</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_pair">Pair</string>
+    <string name="action_forget_pairing">Forget pairing</string>
+    <string name="action_forget">Forget</string>
     <string name="pin_dialog_title">Pair with %1$s</string>
     <string name="pin_dialog_body">The receiver is now showing a PIN on screen. Enter it here.</string>
     <string name="playback_connecting">Connecting…</string>
+    <string name="playback_loading">Loading…</string>
+
+    <string name="forget_dialog_title">Forget pairing with %1$s?</string>
+    <string name="forget_dialog_body">To mirror to it again, this phone will have to pair again with its AirPlay password.</string>
 
     <string name="action_mirror">Mirror screen</string>
     <string name="mirror_channel_name">Screen mirroring</string>
@@ -35,5 +43,9 @@
     <string name="mirror_status_pairing">Pairing…</string>
     <string name="mirror_status_connecting">Connecting…</string>
     <string name="mirror_status_mirroring">Mirroring your screen</string>
-    <string name="mirror_saved_pairing">Paired before — no password needed.</string>
+    <string name="mirror_password_title">Mirror to %1$s</string>
+    <string name="mirror_password_body">Enter the AirPlay password set on the receiver. It is saved on this phone for next time.</string>
+    <string name="mirror_already_active">Already mirroring to %1$s. Stop it first.</string>
+    <string name="mirror_error_password_rejected">%1$s did not accept that password.</string>
+    <string name="mirror_error_saved_password_rejected">%1$s did not accept the saved password. Tap it again to enter the current one.</string>
 </resources>
