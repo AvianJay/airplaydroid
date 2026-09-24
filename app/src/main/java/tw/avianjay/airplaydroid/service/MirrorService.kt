@@ -124,13 +124,19 @@ class MirrorService : Service() {
         val endpoint = device.videoEndpoint
             ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
         val store = PairingStore(this)
-        // No password, PIN or pairing demanded: transient pairing, nothing stored.
+        // Transient pairing only when nothing points at a password: the receiver
+        // does not ask for one or a PIN (the same rule the picker asks by), none
+        // was typed, and no persistent pairing is saved -- a saved pairing and
+        // password beat TXT flags, which are read once per discovery round and
+        // can be stale.
         val flags = device.airPlayTxt?.flags
-        if (flags != null && !flags.passwordRequired && !flags.pinRequired && !flags.pairingRequired) {
+        val saved = runCatching { store.load(device.key) }.getOrNull()
+        if (flags != null && !MirrorController.wantsPassword(device) && !flags.pinRequired &&
+            !flags.pairingRequired && typedPassword.isNullOrEmpty() && saved == null
+        ) {
             return connectTransient(device, mp)
         }
         try {
-            val saved = store.load(device.key)
             val password = typedPassword?.takeIf { it.isNotEmpty() } ?: saved?.password
 
             var entry = saved ?: run {
@@ -273,25 +279,33 @@ class MirrorService : Service() {
             startStreaming(device, opened, mp)
         } catch (e: HomeKitPairing.Failure.Refused) {
             Log.w(TAG, "transient pairing refused", e)
-            finish(
-                if (e.status == 470) {
-                    "${device.displayName} did not accept a connection without a password. " +
-                        "Check its AirPlay access setting."
-                } else {
-                    "Could not pair with ${device.displayName}: ${e.message}"
-                },
-                why = "transient pairing: ${e.message}",
-            )
+            if (e.status == 470) {
+                // It wants a password after all (a password-mode Apple TV answers a
+                // transient M3 with 470). Ask for it on the next tap.
+                MirrorController.markNeedsPassword(device.key)
+                finish(
+                    "${device.displayName} wants its AirPlay password. Tap it again to enter it.",
+                    why = "transient pairing: 470, marked as needing a password",
+                )
+            } else {
+                finish("Could not pair with ${device.displayName}: ${e.message}", why = "transient pairing: ${e.message}")
+            }
         } catch (e: HomeKitPairing.Failure) {
             Log.w(TAG, "transient pairing failed", e)
             finish("Could not pair with ${device.displayName}: ${e.message}", why = "transient pairing: ${e.message}")
         } catch (e: MirrorSession.Failure.Refused) {
             Log.w(TAG, "mirroring refused", e)
-            finish(
-                if (e.status == 401) "${device.displayName} asked for a password; try again once it is listed as needing one."
-                else "${device.displayName} refused mirroring (${e.message}).",
-                why = "refused: ${e.message}",
-            )
+            if (e.status == 401) {
+                // Paired without a password, then challenged for one: it is
+                // password-protected. The next tap asks and pairs persistently.
+                MirrorController.markNeedsPassword(device.key)
+                finish(
+                    "${device.displayName} wants its AirPlay password. Tap it again to enter it.",
+                    why = "refused: 401 after transient pairing, marked as needing a password",
+                )
+            } else {
+                finish("${device.displayName} refused mirroring (${e.message}).", why = "refused: ${e.message}")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "mirroring failed", e)
             finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")

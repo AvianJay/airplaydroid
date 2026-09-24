@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
 import tw.avianjay.airplaydroid.service.MirrorService
+import java.util.concurrent.ConcurrentHashMap
 
 data class MirrorUiState(
     val device: AirPlayDevice? = null,
@@ -94,9 +95,30 @@ object MirrorController {
     fun tapActionFor(device: AirPlayDevice, saved: PairingStore.Summary?, mirror: MirrorUiState): MirrorTap {
         refusalFor(device, saved != null)?.let { return MirrorTap.Refused(it) }
         if (mirror.active) return MirrorTap.Busy(mirror.device ?: device)
-        if (device.airPlayTxt?.passwordRequired == true && saved?.hasPassword != true) return MirrorTap.AskPassword
+        if (wantsPassword(device) && saved?.hasPassword != true) return MirrorTap.AskPassword
         return MirrorTap.Start
     }
+
+    /**
+     * Receivers that refused a connection without a password even though their
+     * advertisement said none was needed -- TXT records are read once per
+     * discovery round, so they go stale when the password is switched on. Kept
+     * for the process so the next tap asks for the password instead of repeating
+     * the same refusal.
+     */
+    private val refusedTransient = ConcurrentHashMap.newKeySet<String>()
+
+    internal fun markNeedsPassword(deviceKey: String) {
+        refusedTransient += deviceKey
+    }
+
+    /**
+     * Whether [device] needs its AirPlay password. The one rule shared by the
+     * picker (whether to ask) and the service (persistent vs transient pairing):
+     * the TXT says so (`pw` or `flags` bit 7), or a transient attempt was refused.
+     */
+    fun wantsPassword(device: AirPlayDevice): Boolean =
+        device.airPlayTxt?.passwordRequired == true || device.key in refusedTransient
 
     /**
      * Starts a mirroring request, or returns false if one is already under way:
