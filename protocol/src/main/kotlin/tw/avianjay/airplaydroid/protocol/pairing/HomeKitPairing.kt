@@ -68,7 +68,32 @@ class HomeKitPairing(
         val receiverId: ByteArray,
         /** The receiver's 32-byte Ed25519 long-term public key. */
         val receiverPublicKey: ByteArray,
-    )
+    ) {
+        /** `key=hex` lines. Contains [clientSeed]: store it privately, never in a backup. */
+        fun encode(): String =
+            "clientId=$clientId\n" +
+                "clientSeed=${clientSeed.hex()}\n" +
+                "receiverId=${receiverId.hex()}\n" +
+                "receiverPublicKey=${receiverPublicKey.hex()}\n"
+
+        companion object {
+            fun decode(text: String): Credentials {
+                val fields = text.lines().filter { '=' in it }
+                    .associate { it.substringBefore('=').trim() to it.substringAfter('=').trim() }
+                fun field(name: String) = fields[name] ?: throw IllegalArgumentException("credentials lack $name")
+                return Credentials(
+                    clientId = field("clientId"),
+                    clientSeed = field("clientSeed").unhex(),
+                    receiverId = field("receiverId").unhex(),
+                    receiverPublicKey = field("receiverPublicKey").unhex(),
+                )
+            }
+
+            private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
+
+            private fun String.unhex() = ByteArray(length / 2) { substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        }
+    }
 
     /**
      * Persistent pair-setup, M1 -> M6. After the SRP half, each side proves it

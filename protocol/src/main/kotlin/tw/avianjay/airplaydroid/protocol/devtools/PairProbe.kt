@@ -41,12 +41,7 @@ object PairProbe {
                         val c = pairing.pair(password)
                         println("M6 OK: receiver id=${String(c.receiverId)} ltpk=${c.receiverPublicKey.hex()}")
                         args.getOrNull(4)?.let { path ->
-                            File(path).writeText(
-                                "clientId=${c.clientId}\n" +
-                                    "clientSeed=${c.clientSeed.hex()}\n" +
-                                    "receiverId=${c.receiverId.hex()}\n" +
-                                    "receiverPublicKey=${c.receiverPublicKey.hex()}\n"
-                            )
+                            File(path).writeText(c.encode())
                             println("credentials written to $path")
                         }
                     }
@@ -59,15 +54,7 @@ object PairProbe {
     }
 
     /** Reads a credentials file written by persistent mode. */
-    fun readCredentials(file: File): HomeKitPairing.Credentials {
-        val fields = file.readLines().filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
-        return HomeKitPairing.Credentials(
-            clientId = fields.getValue("clientId"),
-            clientSeed = fields.getValue("clientSeed").unhex(),
-            receiverId = fields.getValue("receiverId").unhex(),
-            receiverPublicKey = fields.getValue("receiverPublicKey").unhex(),
-        )
-    }
+    fun readCredentials(file: File): HomeKitPairing.Credentials = HomeKitPairing.Credentials.decode(file.readText())
 
     private fun verify(host: String, port: Int, file: File) {
         val credentials = readCredentials(file)
@@ -93,8 +80,6 @@ object PairProbe {
             }
         }
     }
-
-    private fun String.unhex() = ByteArray(length / 2) { substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 }
