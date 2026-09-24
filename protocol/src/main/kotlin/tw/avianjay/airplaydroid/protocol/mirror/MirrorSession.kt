@@ -29,6 +29,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -40,8 +41,9 @@ import kotlin.concurrent.thread
  *
  * Verified end to end against an Apple TV 4K on tvOS 26.6:
  *
- *  1. pair-verify with stored HomeKit credentials, then the control connection
- *     switches to HAP-encrypted framing;
+ *  1. pair-verify with stored HomeKit credentials -- or, for a receiver with no
+ *     password, transient pair-setup on the control connection itself ([Access]) --
+ *     then the control connection switches to HAP-encrypted framing;
  *  2. control SETUP with PTP timing (HTTP Digest on top when `flags` bit 7 is set);
  *  3. the receiver's event channel, HAP-encrypted with the Events-Salt keys,
  *     which also reports the receiver's display box and supported formats;
@@ -85,6 +87,22 @@ class MirrorSession private constructor(
     }
 
     data class Display(val width: Int, val height: Int)
+
+    /** How a session authenticates to the receiver. */
+    sealed class Access {
+        /** A stored persistent pairing (password or PIN receivers): pair-verify. */
+        class Paired(val credentials: HomeKitPairing.Credentials) : Access()
+
+        /**
+         * Transient pairing, for a receiver with no password or PIN (`flags` bits
+         * 3, 7 and 9 clear): pair-setup M1-M4 with the fixed SRP password
+         * [HomeKitPairing.TRANSIENT_PASSWORD] on the control connection, and no
+         * pair-verify. The 64-byte SRP session key then keys every channel, as
+         * owntone, pyatv and the receivers (shairport-sync, airplay2-receiver)
+         * do. [clientId] should be stable per install.
+         */
+        class Transient(val clientId: String) : Access()
+    }
 
     sealed class Failure(message: String) : IOException(message) {
         class Refused(val step: String, val status: Int) :
@@ -410,13 +428,37 @@ class MirrorSession private constructor(
             withAudio: Boolean = false,
             features: ULong = 0uL,
             listener: Listener,
+        ): MirrorSession = open(endpoint, Access.Paired(credentials), password, senderName, withAudio, features, listener)
+
+        /**
+         * As above, authenticating per [access]. A transient session throws
+         * [HomeKitPairing.Failure.Refused] with 470 when the receiver wants a
+         * password or PIN after all.
+         */
+        fun open(
+            endpoint: Endpoint,
+            access: Access,
+            password: String?,
+            senderName: String,
+            withAudio: Boolean = false,
+            features: ULong = 0uL,
+            listener: Listener,
         ): MirrorSession {
             val control = SocketAirPlayConnection(endpoint)
             var events: EventChannel? = null
             var audio: ScreenAudioStream? = null
             var data: Socket? = null
             try {
-                val pairing = HomeKitPairing(control, clientId = credentials.clientId).verify(credentials)
+                val pairing = when (access) {
+                    is Access.Paired ->
+                        HomeKitPairing(control, clientId = access.credentials.clientId).verify(access.credentials)
+                    // M1-M4 on this very connection: the receiver switches it to
+                    // encrypted framing right after its plaintext M4.
+                    is Access.Transient -> HomeKitPairing.Session(
+                        HomeKitPairing(control, clientId = access.clientId)
+                            .pairSetup(HomeKitPairing.Mode.TRANSIENT, HomeKitPairing.TRANSIENT_PASSWORD)
+                    )
+                }
                 control.enableEncryption(pairing.controlWriteKey, pairing.controlReadKey)
                 val requester = Requester(control, password)
 
@@ -425,9 +467,12 @@ class MirrorSession private constructor(
                 // streamConnectionID; RECORD, SET_PARAMETER and TEARDOWN use it too.
                 val controlId = randomId()
                 val controlUri = "rtsp://$host:${endpoint.port}/$controlId"
-                val deviceId = "02:AD:D5:%02X:%02X:%02X".format(
-                    credentials.clientSeed[0], credentials.clientSeed[1], credentials.clientSeed[2],
-                )
+                // A stable per-sender id: from the pairing key, or hashed from the client id.
+                val idSeed = when (access) {
+                    is Access.Paired -> access.credentials.clientSeed
+                    is Access.Transient -> MessageDigest.getInstance("SHA-256").digest(access.clientId.toByteArray())
+                }
+                val deviceId = "02:AD:D5:%02X:%02X:%02X".format(idSeed[0], idSeed[1], idSeed[2])
                 val timingPeer = PDict(
                     mapOf(
                         "ID" to PString(UUID.randomUUID().toString().uppercase()),
@@ -468,7 +513,7 @@ class MirrorSession private constructor(
                     ReceiverClock.receiverMsOf(reply::header)?.let { clock.observe(it, System.nanoTime()) }
                 val clockId = ((setup.entries["timingPeerInfo"] as? PDict)?.entries?.get("ClockID") as? PInt)?.value ?: 0L
 
-                (setup.entries["eventPort"] as? PInt)?.value?.toInt()?.let { port ->
+                (setup.entries["eventPort"] as? PInt)?.value?.toInt()?.takeIf { it > 0 }?.let { port ->
                     events = EventChannel(host, port, pairing.sharedSecret, clockId)
                 }
 

@@ -72,14 +72,12 @@ object MirrorController {
                 "iPhones, iPads and Macs can mirror to it; this app cannot."
         }
         if (hasSavedPairing) return null
-        if (txt.flags.pairingRequired) {
+        if (txt.flags.pairingRequired || txt.flags.pinRequired) {
             return "Mirroring to a receiver that shows a PIN is not supported yet. " +
                 "Set its AirPlay access to require a password instead."
         }
-        if (!txt.flags.passwordRequired) {
-            return "Mirroring currently needs the receiver to have an AirPlay password " +
-                "(Settings > AirPlay > Require Password)."
-        }
+        // Password receivers pair persistently with it; everything else left here
+        // has no password or PIN and is mirrored to with transient pairing.
         return null
     }
 

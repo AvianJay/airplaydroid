@@ -124,6 +124,11 @@ class MirrorService : Service() {
         val endpoint = device.videoEndpoint
             ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
         val store = PairingStore(this)
+        // No password, PIN or pairing demanded: transient pairing, nothing stored.
+        val flags = device.airPlayTxt?.flags
+        if (flags != null && !flags.passwordRequired && !flags.pinRequired && !flags.pairingRequired) {
+            return connectTransient(device, mp)
+        }
         try {
             val saved = store.load(device.key)
             val password = typedPassword?.takeIf { it.isNotEmpty() } ?: saved?.password
@@ -165,37 +170,7 @@ class MirrorService : Service() {
                 runCatching { store.save(device.key, PairingStore.Entry(entry.credentials, password)) }
                     .onFailure { Log.w(TAG, "could not save the accepted password", it) }
             }
-            val adopted = synchronized(lock) { if (stopping) false else { session = opened; true } }
-            if (!adopted) {
-                opened.close()
-                return
-            }
-
-            val (width, height) = ScreenEncoder.canvasFor(opened.receiverDisplay)
-            val dpi = resources.displayMetrics.densityDpi
-            val started = ScreenEncoder(mp, opened, width, height, dpi) { reason ->
-                finish(reason, why = "encoder: $reason")
-            }
-            started.start()
-            val kept = synchronized(lock) { if (stopping) false else { encoder = started; true } }
-            if (!kept) {
-                // finish() ran while the encoder was starting and could not see it.
-                started.stop()
-                return
-            }
-
-            val capture = synchronized(lock) { audio }
-            if (capture != null && opened.hasAudio) {
-                capture.attach(opened)
-            } else if (capture != null) {
-                synchronized(lock) { audio = null }
-                capture.stop()
-            }
-            MirrorLog.write(
-                "mirroring as ${width}x$height (receiver display ${opened.receiverDisplay}) to ${device.displayName}, " +
-                    "audio=${opened.hasAudio}" + (opened.audioFailure?.let { " ($it)" } ?: ""),
-            )
-            MirrorController.setPhase(Phase.Mirroring)
+            startStreaming(device, opened, mp)
         } catch (e: MirrorSession.Failure.Refused) {
             Log.w(TAG, "mirroring refused", e)
             if (e.status == 401) {
@@ -233,6 +208,101 @@ class MirrorService : Service() {
             Log.w(TAG, "mirroring failed", e)
             finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")
         }
+    }
+
+    /**
+     * The half of a session shared by both pairing paths: adopt [opened] unless
+     * finish() already ran, start the encoder, hand audio over.
+     */
+    private fun startStreaming(
+        device: tw.avianjay.airplaydroid.protocol.AirPlayDevice,
+        opened: MirrorSession,
+        mp: MediaProjection,
+    ) {
+        val adopted = synchronized(lock) { if (stopping) false else { session = opened; true } }
+        if (!adopted) {
+            opened.close()
+            return
+        }
+
+        val (width, height) = ScreenEncoder.canvasFor(opened.receiverDisplay)
+        val dpi = resources.displayMetrics.densityDpi
+        val started = ScreenEncoder(mp, opened, width, height, dpi) { reason ->
+            finish(reason, why = "encoder: $reason")
+        }
+        started.start()
+        val kept = synchronized(lock) { if (stopping) false else { encoder = started; true } }
+        if (!kept) {
+            // finish() ran while the encoder was starting and could not see it.
+            started.stop()
+            return
+        }
+
+        val capture = synchronized(lock) { audio }
+        if (capture != null && opened.hasAudio) {
+            capture.attach(opened)
+        } else if (capture != null) {
+            synchronized(lock) { audio = null }
+            capture.stop()
+        }
+        MirrorLog.write(
+            "mirroring as ${width}x$height (receiver display ${opened.receiverDisplay}) to ${device.displayName}, " +
+                "audio=${opened.hasAudio}" + (opened.audioFailure?.let { " ($it)" } ?: ""),
+        )
+        MirrorController.setPhase(Phase.Mirroring)
+    }
+
+    /**
+     * A receiver with no password or PIN: transient pair-setup on the control
+     * connection each session, no stored pairing. A 470 means the receiver wants
+     * a password or PIN after all (its TXT flags are stale, or its access setting
+     * restricts who may connect).
+     */
+    private fun connectTransient(device: tw.avianjay.airplaydroid.protocol.AirPlayDevice, mp: MediaProjection) {
+        try {
+            MirrorController.setPhase(Phase.Connecting)
+            val opened = MirrorSession.open(
+                requireNotNull(device.videoEndpoint),
+                MirrorSession.Access.Transient(transientClientId()),
+                password = null,
+                senderName = Build.MODEL,
+                withAudio = synchronized(lock) { audio != null },
+                features = device.airPlayTxt?.features?.raw ?: 0uL,
+            ) { reason -> finish("The connection to ${device.displayName} ended: $reason", why = "session: $reason") }
+            MirrorLog.write("transient pairing with ${device.displayName} succeeded")
+            startStreaming(device, opened, mp)
+        } catch (e: HomeKitPairing.Failure.Refused) {
+            Log.w(TAG, "transient pairing refused", e)
+            finish(
+                if (e.status == 470) {
+                    "${device.displayName} did not accept a connection without a password. " +
+                        "Check its AirPlay access setting."
+                } else {
+                    "Could not pair with ${device.displayName}: ${e.message}"
+                },
+                why = "transient pairing: ${e.message}",
+            )
+        } catch (e: HomeKitPairing.Failure) {
+            Log.w(TAG, "transient pairing failed", e)
+            finish("Could not pair with ${device.displayName}: ${e.message}", why = "transient pairing: ${e.message}")
+        } catch (e: MirrorSession.Failure.Refused) {
+            Log.w(TAG, "mirroring refused", e)
+            finish(
+                if (e.status == 401) "${device.displayName} asked for a password; try again once it is listed as needing one."
+                else "${device.displayName} refused mirroring (${e.message}).",
+                why = "refused: ${e.message}",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "mirroring failed", e)
+            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")
+        }
+    }
+
+    /** A stable id for transient sessions, generated once per install. */
+    private fun transientClientId(): String {
+        val file = java.io.File(noBackupFilesDir, "transient-client-id")
+        runCatching { file.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }
+        return java.util.UUID.randomUUID().toString().uppercase().also { id -> runCatching { file.writeText(id) } }
     }
 
     private fun open(

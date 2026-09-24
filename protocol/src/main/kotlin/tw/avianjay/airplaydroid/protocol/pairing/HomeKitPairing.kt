@@ -298,6 +298,6 @@ class HomeKitPairing(
 
         /** Picks the mode the receiver's own flags demand. */
         fun modeFor(flags: StatusFlags): Mode =
-            if (flags.pairingRequired || flags.passwordRequired) Mode.PERSISTENT else Mode.TRANSIENT
+            if (flags.pairingRequired || flags.pinRequired || flags.passwordRequired) Mode.PERSISTENT else Mode.TRANSIENT
     }
 }

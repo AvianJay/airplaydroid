@@ -14,6 +14,9 @@ import kotlin.math.sin
  * 440 Hz test tone:
  *
  *   MirrorProbe <host> <port> <credentials-file> <password> <annexb.h264>
+ *   MirrorProbe <host> <port> transient - <annexb.h264>
+ *
+ * `transient` pairs on the spot, for a receiver with no password or PIN.
  *
  * The same code path the app uses, minus the capture, so a protocol change can
  * be checked against real hardware without a phone. The file must be Annex B
@@ -44,7 +47,12 @@ object MirrorProbe {
     fun main(args: Array<String>) {
         require(args.size == 5) { "usage: MirrorProbe <host> <port> <credentials-file> <password> <annexb.h264>" }
         val endpoint = Endpoint(args[0], args[1].toInt())
-        val credentials = PairProbe.readCredentials(File(args[2]))
+        val access = if (args[2] == "transient") {
+            MirrorSession.Access.Transient("AIRPLAYDROID-PROBE-0001")
+        } else {
+            MirrorSession.Access.Paired(PairProbe.readCredentials(File(args[2])))
+        }
+        val password = args[3].takeUnless { it == "-" }
         val units = accessUnits(File(args[4]).readBytes())
         val withAudio = System.getProperty("mirror.audio") != "false"
         val features = System.getProperty("mirror.features", "0x3C177FDE4A7FDFD5").removePrefix("0x").toULong(16)
@@ -52,7 +60,7 @@ object MirrorProbe {
 
         var endedBy: String? = null
         val session = MirrorSession.open(
-            endpoint, credentials, args[3], "AirPlayDroid probe", withAudio = withAudio, features = features,
+            endpoint, access, password, "AirPlayDroid probe", withAudio = withAudio, features = features,
         ) { reason ->
             endedBy = reason
             println("${t()} !!! session ended by receiver: $reason")
