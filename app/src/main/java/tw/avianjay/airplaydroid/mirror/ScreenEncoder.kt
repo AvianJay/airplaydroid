@@ -22,9 +22,13 @@ import kotlin.concurrent.thread
  * MediaCodec's Annex B output into the avcC codec packet and AVCC frames the
  * data channel carries.
  *
- * The picture size is fixed for the session. Rotating the phone makes the
- * VirtualDisplay letterbox the rotated content inside the original frame
- * rather than renegotiating; handling rotation properly is future work.
+ * Rotation: the canvas is a fixed landscape box matching the receiver's
+ * display ([canvasFor]), never the phone's shape. Android fits the mirrored
+ * screen into the VirtualDisplay keeping its aspect ratio and centred, so a
+ * portrait phone arrives pillarboxed and a landscape one fills the frame --
+ * what the TV would show anyway -- and turning the phone needs no encoder
+ * restart and no mid-stream size change. (A MediaProjection may create only
+ * one VirtualDisplay, so a resize would have to reuse it; this avoids that.)
  */
 class ScreenEncoder(
     private val projection: MediaProjection,
@@ -84,6 +88,9 @@ class ScreenEncoder(
         try {
             while (running) {
                 val index = codec.dequeueOutputBuffer(info, 100_000L)
+                if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    Log.i(TAG, "encoder output format: ${codec.outputFormat}")
+                }
                 if (index < 0) continue
                 val buffer = codec.getOutputBuffer(index)
                 val bytes = if (buffer != null && info.size > 0) {
@@ -109,7 +116,9 @@ class ScreenEncoder(
                 if (s != null && p != null) {
                     val avcC = H264.avcC(s, p)
                     if (!avcC.contentEquals(sentConfig)) {
-                        session.sendCodecConfig(avcC, width, height)
+                        // Goes out with, and stamped as, the next keyframe.
+                        Log.i(TAG, "codec config ${if (sentConfig == null) "initial" else "CHANGED"}: ${avcC.size} bytes")
+                        session.setCodecConfig(avcC, width, height)
                         sentConfig = avcC
                     }
                 }
@@ -123,7 +132,7 @@ class ScreenEncoder(
                 }
                 val keyframe = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0 ||
                     vcl.any { H264.type(it) == H264.NAL_IDR }
-                session.sendFrame(H264.toAvcc(vcl), keyframe)
+                session.sendFrame(H264.toAvcc(vcl), keyframe, captureNanos(info.presentationTimeUs))
             }
         } catch (e: IOException) {
             if (running) onFailure("Lost the video connection: ${e.message}")
@@ -131,6 +140,17 @@ class ScreenEncoder(
             // The codec was stopped under us by stop(); only report if unexpected.
             if (running) onFailure("The video encoder stopped: ${e.message}")
         }
+    }
+
+    /**
+     * A surface encoder's presentation time is when the VirtualDisplay produced
+     * the frame, on the System.nanoTime() clock -- the capture time audio uses
+     * too, so the two stay in sync. Guarded in case an encoder rebases it.
+     */
+    private fun captureNanos(presentationTimeUs: Long): Long {
+        val now = System.nanoTime()
+        val pts = presentationTimeUs * 1_000
+        return if (pts in now - 1_000_000_000L..now) pts else now
     }
 
     fun stop() {
@@ -148,14 +168,17 @@ class ScreenEncoder(
         private const val FRAME_RATE = 30
 
         /**
-         * The encoded size for a screen of [screenWidth] x [screenHeight]: the
-         * same aspect ratio, the longer side capped at [maxSide], both sides a
-         * multiple of 16 so every hardware encoder accepts them.
+         * The fixed canvas for a receiver whose display is [display]: its own
+         * size in landscape, capped at 1920x1080 (the Apple TV's decode ceiling)
+         * with the aspect kept, both sides a multiple of 16 so every hardware
+         * encoder accepts them. 1280x720 when the receiver did not say.
          */
-        fun encodedSize(screenWidth: Int, screenHeight: Int, maxSide: Int = 1280): Pair<Int, Int> {
-            val scale = minOf(1.0, maxSide.toDouble() / maxOf(screenWidth, screenHeight))
+        fun canvasFor(display: MirrorSession.Display?): Pair<Int, Int> {
+            val w = maxOf(display?.width ?: 1280, display?.height ?: 720)
+            val h = minOf(display?.width ?: 1280, display?.height ?: 720)
+            val scale = minOf(1.0, 1920.0 / w, 1080.0 / h)
             fun align(v: Double) = maxOf(16, (v / 16).toInt() * 16)
-            return align(screenWidth * scale) to align(screenHeight * scale)
+            return align(w * scale) to align(h * scale)
         }
     }
 }

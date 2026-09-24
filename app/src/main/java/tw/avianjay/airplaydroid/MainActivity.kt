@@ -31,6 +31,13 @@ class MainActivity : ComponentActivity() {
             // discovery and the foreground service are unaffected.
         }
 
+    // Asked right before screen capture. Either answer proceeds to capture:
+    // without it, mirroring simply carries no sound.
+    private val requestAudioPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            launchScreenCapture()
+        }
+
     private val requestScreenCapture =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             MirrorController.onConsent(this, result.resultCode, result.data)
@@ -85,13 +92,25 @@ class MainActivity : ComponentActivity() {
                     hasSavedPairing = { pairings.has(it.key) },
                     onMirror = { device, password ->
                         MirrorController.request(device, password)
-                        val manager = getSystemService(MediaProjectionManager::class.java)
-                        requestScreenCapture.launch(manager.createScreenCaptureIntent())
+                        val audioGranted = ContextCompat.checkSelfPermission(
+                            this, Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        // Playback capture exists from Android 10; asking earlier is pointless.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !audioGranted) {
+                            requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            launchScreenCapture()
+                        }
                     },
                     onStopMirror = { MirrorController.stop(this) },
                 )
             }
         }
+    }
+
+    private fun launchScreenCapture() {
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        requestScreenCapture.launch(manager.createScreenCaptureIntent())
     }
 
     /** Requested in context on first launch; never gates discovery. */

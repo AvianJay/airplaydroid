@@ -10,6 +10,7 @@ import tw.avianjay.airplaydroid.protocol.http.SocketAirPlayConnection
 import tw.avianjay.airplaydroid.protocol.pairing.HapCrypto
 import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
 import tw.avianjay.airplaydroid.protocol.plist.BinaryPlist
+import tw.avianjay.airplaydroid.protocol.plist.PlistValue
 import tw.avianjay.airplaydroid.protocol.plist.PlistValue.PArray
 import tw.avianjay.airplaydroid.protocol.plist.PlistValue.PBool
 import tw.avianjay.airplaydroid.protocol.plist.PlistValue.PData
@@ -23,11 +24,14 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -39,31 +43,38 @@ import kotlin.concurrent.thread
  *  1. pair-verify with stored HomeKit credentials, then the control connection
  *     switches to HAP-encrypted framing;
  *  2. control SETUP with PTP timing (HTTP Digest on top when `flags` bit 7 is set);
- *  3. the receiver's event channel, HAP-encrypted with the Events-Salt keys;
- *  4. RECORD, then a SETUP for a type-110 screen stream, which yields a dataPort;
+ *  3. the receiver's event channel, HAP-encrypted with the Events-Salt keys,
+ *     which also reports the receiver's display box and supported formats;
+ *  4. RECORD; optionally a SETUP for a type-96 screen-audio stream
+ *     ([ScreenAudioStream]); then a SETUP for a type-110 screen stream, which
+ *     yields a dataPort;
  *  5. on the data channel: an `avcC` codec packet, then 128-byte-header frames
  *     sealed with ChaCha20-Poly1305 under
  *     HKDF(pair-verify secret, "DataStream-Salt<id>", "DataStream-Output-Encryption-Key"),
  *     the header as AAD. A frame sealed with any other key makes the receiver
  *     drop the data channel within milliseconds.
  *
- * Presentation timestamps are anchored to the receiver's own clock, read from
- * `X-Apple-RequestReceivedTimestamp` on the SETUP reply, so no PTP client runs.
+ * Presentation timestamps are capture time plus [LATENCY_MS] on the receiver's
+ * own clock ([ReceiverClock]), so no PTP client runs, and audio and video that
+ * were captured together present together.
  *
- * Blocking by design. [open] and [close] do network I/O; [sendCodecConfig] and
- * [sendFrame] write to a socket and may block on back-pressure. All are safe to
- * call from one encoder thread while the session's own keep-alive threads run.
+ * Blocking by design. [open] and [close] do network I/O; the send methods write
+ * to sockets and may block on back-pressure. Video and audio may be fed from
+ * two different threads while the session's own keep-alive threads run.
  */
 class MirrorSession private constructor(
     private val control: SocketAirPlayConnection,
     private val requester: Requester,
     private val controlUri: String,
     private val data: Socket,
-    private val events: Socket?,
+    private val events: EventChannel?,
+    private val audio: ScreenAudioStream?,
     private val videoKey: ByteArray,
-    private val clockId: Long,
-    private val anchorMs: Long,
-    private val anchorNanos: Long,
+    private val clock: ReceiverClock,
+    /** What the receiver's display is, per its updateInfo event, if it said. */
+    val receiverDisplay: Display?,
+    /** Why screen audio is not running, if it was asked for and is not. */
+    val audioFailure: String?,
     private val listener: Listener,
 ) : Closeable {
 
@@ -72,6 +83,8 @@ class MirrorSession private constructor(
         /** The session ended without [close] being called; [reason] says why. */
         fun onEnded(reason: String)
     }
+
+    data class Display(val width: Int, val height: Int)
 
     sealed class Failure(message: String) : IOException(message) {
         class Refused(val step: String, val status: Int) :
@@ -85,8 +98,15 @@ class MirrorSession private constructor(
     private val closed = AtomicBoolean(false)
     private var nonce = 0L
     private var lastTimestamp = 0L
+    private var pendingConfig: ByteArray? = null
 
     val isOpen: Boolean get() = !closed.get()
+
+    /** True when screen audio was negotiated and [sendAudio] reaches the receiver. */
+    val hasAudio: Boolean get() = audio != null
+
+    /** How many packet retransmissions the receiver has asked for; a sign it is receiving audio. */
+    val audioRetransmitRequests: Int get() = audio?.retransmitRequests?.get() ?: 0
 
     private fun start() {
         thread(isDaemon = true, name = "mirror-data-watch") {
@@ -110,10 +130,16 @@ class MirrorSession private constructor(
         thread(isDaemon = true, name = "mirror-feedback") {
             var failures = 0
             while (isOpen) {
-                val status = runCatching { requester.request("POST", "/feedback").status }.getOrNull()
-                failures = if (status == 200) 0 else failures + 1
+                val response = runCatching { requester.request("POST", "/feedback") }.getOrNull()
+                val receivedAt = System.nanoTime()
+                if (response?.status == 200) {
+                    failures = 0
+                    ReceiverClock.receiverMsOf(response::header)?.let { clock.observe(it, receivedAt) }
+                } else {
+                    failures++
+                }
                 if (failures >= MAX_FEEDBACK_FAILURES) {
-                    end("the receiver stopped answering (/feedback ${status ?: "failed"})")
+                    end("the receiver stopped answering (/feedback ${response?.status ?: "failed"})")
                     break
                 }
                 sleepQuietly(2_000)
@@ -122,58 +148,76 @@ class MirrorSession private constructor(
     }
 
     /**
-     * Sends a codec packet: the stream's `avcC` record. Must precede the first
-     * frame, and be re-sent whenever the SPS/PPS or the picture size change.
+     * Sets the stream's `avcC` record. It goes out as a codec packet just before
+     * the next keyframe, stamped with that keyframe's timestamp -- receivers pair
+     * the two by timestamp. Set it again whenever the SPS/PPS change.
      */
-    fun sendCodecConfig(avcC: ByteArray, width: Int, height: Int) {
+    fun setCodecConfig(avcC: ByteArray, width: Int, height: Int) {
         val header = ByteArray(HEADER_SIZE)
         val le = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
         le.putInt(0, avcC.size)
         header[4] = 0x01 // codec data
         header[6] = 0x16 // H.264 format description
         header[7] = 0x01
-        le.putLong(8, nextTimestamp())
         // Encoded size, then source and destination rects covering the whole picture.
         for (offset in intArrayOf(16, 40, 56)) {
             le.putFloat(offset, width.toFloat())
             le.putFloat(offset + 4, height.toFloat())
         }
-        write(header, avcC)
+        synchronized(writeLock) { pendingConfig = header + avcC }
     }
 
-    /** Sends one access unit in AVCC form (4-byte big-endian NAL lengths). */
-    fun sendFrame(avcc: ByteArray, keyframe: Boolean) {
+    /**
+     * Sends one access unit in AVCC form (4-byte big-endian NAL lengths),
+     * captured at local monotonic time [captureNanos] (for a MediaCodec surface
+     * encoder: `presentationTimeUs * 1000`).
+     */
+    fun sendFrame(avcc: ByteArray, keyframe: Boolean, captureNanos: Long = System.nanoTime()) {
         val header = ByteArray(HEADER_SIZE)
         val le = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
         le.putInt(0, avcc.size + TAG_SIZE)
         header[4] = 0x00 // video
         header[5] = if (keyframe) 0x10 else 0x00
-        le.putLong(8, nextTimestamp())
         le.putLong(40, clockId)
         synchronized(writeLock) {
+            if (!isOpen) throw IOException("mirroring session is closed")
+            val ts = timestampFor(captureNanos)
+            le.putLong(8, ts)
+            val config = pendingConfig
+            if (keyframe && config != null) {
+                ByteBuffer.wrap(config).order(ByteOrder.LITTLE_ENDIAN).putLong(8, ts)
+                out.write(config)
+                pendingConfig = null
+            }
             val nonceBytes = ByteArray(12)
             ByteBuffer.wrap(nonceBytes).order(ByteOrder.LITTLE_ENDIAN).putLong(4, nonce++)
-            write(header, HapCrypto.seal(videoKey, nonceBytes, avcc, header))
-        }
-    }
-
-    private fun write(header: ByteArray, payload: ByteArray) {
-        if (!isOpen) throw IOException("mirroring session is closed")
-        synchronized(writeLock) {
             out.write(header)
-            out.write(payload)
+            out.write(HapCrypto.seal(videoKey, nonceBytes, avcc, header))
             out.flush()
         }
     }
 
-    /** Now, plus the playout lead, on the receiver's clock, as 32.32 fixed point; never decreasing. */
-    private fun nextTimestamp(): Long = synchronized(writeLock) {
-        val nanos = anchorMs * 1_000_000 + (System.nanoTime() - anchorNanos) + LATENCY_MS * 1_000_000
-        val seconds = nanos / 1_000_000_000L
-        val fraction = ((nanos % 1_000_000_000L) shl 32) / 1_000_000_000L
-        val ts = (seconds shl 32) or fraction
-        (if (ts > lastTimestamp) ts else lastTimestamp + 1).also { lastTimestamp = it }
+    /**
+     * Sends one screen-audio frame: exactly 352 interleaved stereo 16-bit
+     * samples at 44.1 kHz, the first captured at local monotonic time
+     * [captureNanos]. A no-op when the session has no audio.
+     */
+    fun sendAudio(pcm: ShortArray, captureNanos: Long) {
+        if (isOpen) audio?.send(pcm, captureNanos)
     }
+
+    /** Test hook: consumes an audio frame's sequence number without sending it. */
+    internal fun withholdAudio(pcm: ShortArray, captureNanos: Long) {
+        if (isOpen) audio?.send(pcm, captureNanos, transmit = false)
+    }
+
+    /** Capture time plus the playout lead, on the receiver's clock, as 32.32; never decreasing. */
+    private fun timestampFor(captureNanos: Long): Long {
+        val ts = ReceiverClock.toFixed32(clock.receiverNanos(captureNanos) + LATENCY_MS * 1_000_000)
+        return maxOf(ts, lastTimestamp).also { lastTimestamp = it }
+    }
+
+    private val clockId: Long get() = events?.clockId ?: 0L
 
     private fun end(reason: String) {
         if (closed.compareAndSet(false, true)) {
@@ -188,6 +232,7 @@ class MirrorSession private constructor(
 
     private fun shutdown(teardown: Boolean) {
         if (teardown) runCatching { requester.request("TEARDOWN", controlUri) }
+        runCatching { audio?.close() }
         runCatching { data.close() }
         runCatching { events?.close() }
         runCatching { control.close() }
@@ -207,6 +252,7 @@ class MirrorSession private constructor(
             uri: String,
             body: PDict? = null,
             extra: List<Pair<String, String>> = emptyList(),
+            text: String? = null,
         ): AirPlayResponse {
             fun send() = control.exchange(
                 AirPlayRequest(
@@ -217,13 +263,14 @@ class MirrorSession private constructor(
                         add("CSeq" to (cseq++).toString())
                         add("User-Agent" to "AirPlay/$SOURCE_VERSION")
                         if (body != null) add("Content-Type" to "application/x-apple-binary-plist")
+                        if (text != null) add("Content-Type" to "text/parameters")
                         addAll(extra)
                         val c = challenge
                         if (c != null && password != null) {
                             add("Authorization" to DigestAuth.authorization(c, method, uri, password))
                         }
                     },
-                    body = body?.let { BinaryPlist.encode(it) },
+                    body = body?.let { BinaryPlist.encode(it) } ?: text?.toByteArray(),
                 )
             )
             var response = send()
@@ -235,14 +282,100 @@ class MirrorSession private constructor(
         }
     }
 
+    /**
+     * The receiver's event channel: RTSP requests *from* it, HAP-encrypted with
+     * the Events-Salt keys (it writes with Events-Write, we answer with
+     * Events-Read). Every request is answered 200. Two commands matter:
+     * `updateInfo` carries the display box and supported formats, and
+     * `updateTimingPeerInfo` moves the stream to a new PTP ClockID.
+     */
+    private class EventChannel(host: String, port: Int, sharedSecret: ByteArray, initialClockId: Long) : Closeable {
+        private val socket = Socket().apply { connect(InetSocketAddress(host, port), 5_000) }
+        private val infoArrived = CountDownLatch(1)
+
+        @Volatile var clockId: Long = initialClockId
+        @Volatile var display: Display? = null
+        @Volatile var screenStreamFormats: Long? = null
+
+        init {
+            val readKey = HapCrypto.hkdf("Events-Salt", "Events-Write-Encryption-Key", sharedSecret)
+            val writeKey = HapCrypto.hkdf("Events-Salt", "Events-Read-Encryption-Key", sharedSecret)
+            val input = BufferedInputStream(HapFrameInputStream(socket.getInputStream(), readKey))
+            val output = HapFrameOutputStream(socket.getOutputStream(), writeKey)
+            thread(isDaemon = true, name = "mirror-events") {
+                runCatching {
+                    while (true) {
+                        readLine(input) ?: break
+                        var cseq = "0"
+                        var length = 0
+                        while (true) {
+                            val header = readLine(input) ?: return@runCatching
+                            if (header.isEmpty()) break
+                            val name = header.substringBefore(':').trim()
+                            val value = header.substringAfter(':').trim()
+                            if (name.equals("CSeq", true)) cseq = value
+                            if (name.equals("Content-Length", true)) length = value.toIntOrNull() ?: 0
+                        }
+                        val body = ByteArray(length)
+                        var read = 0
+                        while (read < length) {
+                            val n = input.read(body, read, length - read)
+                            if (n < 0) return@runCatching
+                            read += n
+                        }
+                        runCatching { handle(BinaryPlist.decode(body)) }
+                        output.write("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                        output.flush()
+                    }
+                }
+            }
+        }
+
+        private fun handle(command: PlistValue) {
+            val dict = command as? PDict ?: return
+            val value = dict.entries["value"] as? PDict ?: return
+            when ((dict.entries["type"] as? PString)?.value) {
+                "updateInfo" -> {
+                    val first = ((value.entries["displays"] as? PArray)?.values?.firstOrNull() as? PDict)?.entries
+                    val w = (first?.get("widthPixels") as? PInt)?.value?.toInt()
+                    val h = (first?.get("heightPixels") as? PInt)?.value?.toInt()
+                    if (w != null && h != null && w > 0 && h > 0) display = Display(w, h)
+                    val formats = (value.entries["supportedFormats"] as? PDict)?.entries
+                    screenStreamFormats = (formats?.get("screenStream") as? PInt)?.value
+                    infoArrived.countDown()
+                }
+                "updateTimingPeerInfo" ->
+                    (value.entries["ClockID"] as? PInt)?.value?.takeIf { it != 0L }?.let { clockId = it }
+            }
+        }
+
+        /** Waits up to [ms] for the first updateInfo. */
+        fun awaitInfo(ms: Long) = infoArrived.await(ms, TimeUnit.MILLISECONDS)
+
+        override fun close() {
+            runCatching { socket.close() }
+        }
+    }
+
     companion object {
         private const val SOURCE_VERSION = "980.71.1"
         private const val HEADER_SIZE = 128
         private const val TAG_SIZE = 16
         private const val MAX_FEEDBACK_FAILURES = 3
 
-        /** How far ahead of "now" frames are stamped: the receiver's playout buffer. */
+        /** Feature bit 59: the receiver takes `streamConnections` in audio stream descriptors. */
+        private const val FEATURE_STREAM_CONNECTIONS = 59
+
+        /** `supportedFormats.screenStream` bit 18: ALAC 44100/16/2. */
+        private const val FORMAT_ALAC_44100_16_2 = 0x40000L
+
+        /**
+         * How far behind capture a frame or sample is presented: the receiver's
+         * playout buffer. Covers encoding plus the network; audio and video share it.
+         */
         const val LATENCY_MS = 250L
+
+        private val LATENCY_SAMPLES = (LATENCY_MS * ScreenAudioStream.SAMPLE_RATE / 1000).toInt()
 
         /**
          * Pairs with a receiver for the first time. [password] is its AirPlay
@@ -256,16 +389,26 @@ class MirrorSession private constructor(
          * Establishes the session up to an open data channel. Throws
          * [HomeKitPairing.Failure] if the receiver no longer accepts [credentials]
          * (it was reset, or the pairing removed) and [Failure] for anything later.
+         *
+         * With [withAudio], a screen-audio stream is set up as well. Audio is
+         * best-effort: if the receiver refuses it, the session still opens,
+         * video-only, and [audioFailure] says why.
+         *
+         * [features] are the receiver's advertised feature bits (the `features`
+         * TXT value); they pick the audio descriptor layout.
          */
         fun open(
             endpoint: Endpoint,
             credentials: HomeKitPairing.Credentials,
             password: String?,
             senderName: String,
+            withAudio: Boolean = false,
+            features: ULong = 0uL,
             listener: Listener,
         ): MirrorSession {
             val control = SocketAirPlayConnection(endpoint)
-            var events: Socket? = null
+            var events: EventChannel? = null
+            var audio: ScreenAudioStream? = null
             var data: Socket? = null
             try {
                 val pairing = HomeKitPairing(control, clientId = credentials.clientId).verify(credentials)
@@ -273,7 +416,10 @@ class MirrorSession private constructor(
                 val requester = Requester(control, password)
 
                 val host = endpoint.host
-                val controlUri = "rtsp://$host:${endpoint.port}/${randomId()}"
+                // The control URI's id doubles as the audio stream's
+                // streamConnectionID; RECORD, SET_PARAMETER and TEARDOWN use it too.
+                val controlId = randomId()
+                val controlUri = "rtsp://$host:${endpoint.port}/$controlId"
                 val deviceId = "02:AD:D5:%02X:%02X:%02X".format(
                     credentials.clientSeed[0], credentials.clientSeed[1], credentials.clientSeed[2],
                 )
@@ -307,16 +453,15 @@ class MirrorSession private constructor(
                         )
                     ),
                 )
-                val anchorNanos = System.nanoTime()
+                val firstAt = System.nanoTime()
                 if (!first.isSuccess) throw Failure.Refused("control SETUP", first.status)
                 val setup = BinaryPlist.decode(first.body) as? PDict
                     ?: throw Failure.Malformed("control SETUP reply is not a dictionary")
-                val anchorMs = (first.header("X-Apple-RequestReceivedTimestamp")?.toLongOrNull() ?: 0L) +
-                    (first.header("X-Apple-ProcessingTime")?.toLongOrNull() ?: 0L)
+                val clock = ReceiverClock(ReceiverClock.receiverMsOf(first::header) ?: 0L, firstAt)
                 val clockId = ((setup.entries["timingPeerInfo"] as? PDict)?.entries?.get("ClockID") as? PInt)?.value ?: 0L
 
                 (setup.entries["eventPort"] as? PInt)?.value?.toInt()?.let { port ->
-                    events = openEventChannel(host, port, pairing.sharedSecret)
+                    events = EventChannel(host, port, pairing.sharedSecret, clockId)
                 }
 
                 if ((setup.entries["skipRecord"] as? PBool)?.value != true) {
@@ -325,6 +470,26 @@ class MirrorSession private constructor(
                         extra = listOf("Range" to "npt=0-", "RTP-Info" to "seq=0;rtptime=0"),
                     )
                     if (!record.isSuccess) throw Failure.Refused("RECORD", record.status)
+                }
+                // The display box and formats arrive in updateInfo, right after RECORD.
+                events?.awaitInfo(1_500)
+
+                var audioFailure: String? = null
+                if (withAudio) {
+                    val formats = events?.screenStreamFormats
+                    if (formats != null && formats and FORMAT_ALAC_44100_16_2 == 0L) {
+                        audioFailure = "the receiver does not accept ALAC screen audio"
+                    } else {
+                        try {
+                            audio = setupAudio(
+                                requester, controlUri, controlId, InetAddress.getByName(host), clock,
+                                { events?.clockId ?: clockId },
+                                modernLayout = features and (1uL shl FEATURE_STREAM_CONNECTIONS) != 0uL,
+                            )
+                        } catch (e: IOException) {
+                            audioFailure = e.message ?: "audio setup failed"
+                        }
+                    }
                 }
 
                 val videoId = randomId()
@@ -363,63 +528,106 @@ class MirrorSession private constructor(
                     connect(InetSocketAddress(host, dataPort.value.toInt()), 5_000)
                 }
 
+                if (audio != null) {
+                    // 0 dB, i.e. full scale. Real senders send it twice.
+                    repeat(2) { runCatching { requester.request("SET_PARAMETER", controlUri, text = "volume: 0.000000\r\n") } }
+                }
+
                 val videoKey = HapCrypto.hkdf(
                     "DataStream-Salt$videoId", "DataStream-Output-Encryption-Key", pairing.sharedSecret,
                 )
                 return MirrorSession(
-                    control, requester, controlUri, data!!, events, videoKey,
-                    clockId, anchorMs, anchorNanos, listener,
+                    control, requester, controlUri, data!!, events, audio, videoKey,
+                    clock, events?.display, audioFailure, listener,
                 ).also { it.start() }
             } catch (t: Throwable) {
                 runCatching { data?.close() }
+                runCatching { audio?.close() }
                 runCatching { events?.close() }
                 runCatching { control.close() }
                 throw t
             }
         }
 
-        private fun randomId(): Long = UUID.randomUUID().mostSignificantBits and Long.MAX_VALUE
-
         /**
-         * The receiver's event channel: RTSP requests *from* it, HAP-encrypted
-         * with the Events-Salt keys (it writes with Events-Write, we answer with
-         * Events-Read). Every request is answered 200; the contents are not
-         * needed to keep the stream running.
+         * SETUP for the type-96 screen-audio stream, on the control URI. Tries the
+         * layout the features suggest and, if the receiver rejects the shape, the
+         * other one once.
          */
-        private fun openEventChannel(host: String, port: Int, sharedSecret: ByteArray): Socket {
-            val readKey = HapCrypto.hkdf("Events-Salt", "Events-Write-Encryption-Key", sharedSecret)
-            val writeKey = HapCrypto.hkdf("Events-Salt", "Events-Read-Encryption-Key", sharedSecret)
-            val socket = Socket().apply { connect(InetSocketAddress(host, port), 5_000) }
-            val input = BufferedInputStream(HapFrameInputStream(socket.getInputStream(), readKey))
-            val output = HapFrameOutputStream(socket.getOutputStream(), writeKey)
-            thread(isDaemon = true, name = "mirror-events") {
-                runCatching {
-                    while (true) {
-                        readLine(input) ?: break
-                        var cseq = "0"
-                        var length = 0
-                        while (true) {
-                            val header = readLine(input) ?: return@runCatching
-                            if (header.isEmpty()) break
-                            val name = header.substringBefore(':').trim()
-                            val value = header.substringAfter(':').trim()
-                            if (name.equals("CSeq", true)) cseq = value
-                            if (name.equals("Content-Length", true)) length = value.toIntOrNull() ?: 0
-                        }
-                        val body = ByteArray(length)
-                        var read = 0
-                        while (read < length) {
-                            val n = input.read(body, read, length - read)
-                            if (n < 0) return@runCatching
-                            read += n
-                        }
-                        output.write("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\nContent-Length: 0\r\n\r\n".toByteArray())
-                        output.flush()
-                    }
+        private fun setupAudio(
+            requester: Requester,
+            controlUri: String,
+            streamConnectionId: Long,
+            host: InetAddress,
+            clock: ReceiverClock,
+            clockId: () -> Long,
+            modernLayout: Boolean,
+        ): ScreenAudioStream {
+            val controlSocket = DatagramSocket()
+            try {
+                val key = ScreenAudioStream.newKey()
+                var modern = modernLayout
+                var response = requester.request("SETUP", controlUri, audioDescriptor(streamConnectionId, key, controlSocket.localPort, modern))
+                if (response.status in SHAPE_REJECTED) {
+                    modern = !modern
+                    response = requester.request("SETUP", controlUri, audioDescriptor(streamConnectionId, key, controlSocket.localPort, modern))
                 }
+                if (!response.isSuccess) throw Failure.Refused("screen audio SETUP", response.status)
+
+                val stream = (((BinaryPlist.decode(response.body) as? PDict)?.entries?.get("streams") as? PArray)
+                    ?.values?.firstOrNull() as? PDict)?.entries
+                    ?: throw Failure.Malformed("screen audio SETUP carried no stream")
+                var dataPort = (stream["dataPort"] as? PInt)?.value?.toInt()
+                var remoteControlPort = (stream["controlPort"] as? PInt)?.value?.toInt()
+                (stream["streamConnections"] as? PDict)?.entries?.let { connections ->
+                    fun port(type: String) = ((connections[type] as? PDict)?.entries?.get("streamConnectionKeyPort") as? PInt)?.value?.toInt()
+                    port("streamConnectionTypeRTP")?.let { dataPort = it }
+                    port("streamConnectionTypeRTCP")?.let { remoteControlPort = it }
+                }
+                if (dataPort == null || remoteControlPort == null) {
+                    throw Failure.Malformed("screen audio SETUP carried no ports")
+                }
+                return ScreenAudioStream(host, dataPort!!, remoteControlPort!!, controlSocket, key, clock, clockId, LATENCY_SAMPLES)
+            } catch (t: Throwable) {
+                controlSocket.close()
+                throw t
             }
-            return socket
         }
+
+        private val SHAPE_REJECTED = setOf(400, 406, 415, 455, 500, 501)
+
+        private fun audioDescriptor(id: Long, key: ByteArray, localControlPort: Int, modern: Boolean): PDict {
+            val stream = linkedMapOf<String, PlistValue>(
+                "type" to PInt(96),
+                "streamConnectionID" to PInt(id),
+                "ct" to PInt(2), // ALAC
+                "spf" to PInt(AlacVerbatim.SAMPLES_PER_FRAME.toLong()),
+                "sr" to PInt(ScreenAudioStream.SAMPLE_RATE),
+                "audioFormat" to PInt(FORMAT_ALAC_44100_16_2),
+                "audioMode" to PString("default"),
+                "usingScreen" to PBool(true),
+                // The lead is announced once, as latencyMax; a nonzero minimum
+                // makes the receiver add it a second time.
+                "latencyMin" to PInt(0),
+                "latencyMax" to PInt(LATENCY_SAMPLES.toLong()),
+                "shk" to PData(key),
+            )
+            if (modern) {
+                stream["isMedia"] = PBool(false)
+                stream["supportsDynamicStreamID"] = PBool(true)
+                stream["streamConnections"] = PDict(
+                    mapOf(
+                        "streamConnectionTypeRTP" to PDict(mapOf("streamConnectionKeyUseStreamEncryptionKey" to PBool(true))),
+                        "streamConnectionTypeRTCP" to PDict(mapOf("streamConnectionKeyPort" to PInt(localControlPort.toLong()))),
+                    )
+                )
+            } else {
+                stream["controlPort"] = PInt(localControlPort.toLong())
+            }
+            return PDict(mapOf("streams" to PArray(listOf(PDict(stream)))))
+        }
+
+        private fun randomId(): Long = UUID.randomUUID().mostSignificantBits and Long.MAX_VALUE
 
         private fun readLine(input: InputStream): String? {
             val buffer = ByteArrayOutputStream()
@@ -433,7 +641,7 @@ class MirrorSession private constructor(
 
         /** The local address the OS would use to reach [host], for the PTP peer entry. */
         private fun localAddressTowards(host: String): String =
-            DatagramSocket().use {
+            java.net.DatagramSocket().use {
                 it.connect(InetSocketAddress(host, 9))
                 it.localAddress.hostAddress
             }

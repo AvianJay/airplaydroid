@@ -21,6 +21,10 @@
     <!-- Screen mirroring: the capture itself is gated by the per-session consent
          prompt, which is what satisfies this type's runtime prerequisite. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Screen-mirroring audio: AudioPlaybackCapture (API 29+) needs it even
+         though it records what apps play, not the microphone. Requested in
+         context; a denial only means mirroring without sound. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- The only runtime permission in milestone 1. Requested in context; a denial
          hides the notification but never blocks discovery. -->

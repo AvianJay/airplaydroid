@@ -7,21 +7,20 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.DisplayMetrics
 import android.util.Log
-import android.view.Display
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import tw.avianjay.airplaydroid.MainActivity
 import tw.avianjay.airplaydroid.R
+import tw.avianjay.airplaydroid.mirror.AudioCapture
 import tw.avianjay.airplaydroid.mirror.MirrorController
 import tw.avianjay.airplaydroid.mirror.MirrorUiState.Phase
 import tw.avianjay.airplaydroid.mirror.PairingStore
@@ -47,6 +46,7 @@ class MirrorService : Service() {
     private var projection: MediaProjection? = null
     private var session: MirrorSession? = null
     private var encoder: ScreenEncoder? = null
+    @Volatile private var audio: AudioCapture? = null
     @Volatile private var stopping = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -90,6 +90,14 @@ class MirrorService : Service() {
             }
         }, main)
 
+        // Start audio capture now, while the consent prompt has just returned us
+        // to the foreground: Android 11 refuses to start it from the background.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) {
+            audio = AudioCapture.start(mp)
+        }
+
         val password = MirrorController.takePassword()
         worker.execute { connect(device, password, mp) }
         return START_NOT_STICKY
@@ -114,7 +122,7 @@ class MirrorService : Service() {
 
             MirrorController.setPhase(Phase.Connecting)
             val opened = try {
-                open(endpoint, saved.credentials, password)
+                open(device, saved.credentials, password)
             } catch (e: HomeKitPairing.Failure) {
                 // The receiver no longer knows us (reset, or pairing removed in
                 // its settings). Pair again once, if we can.
@@ -125,7 +133,7 @@ class MirrorService : Service() {
                 val fresh = PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
                 store.save(device.key, fresh)
                 MirrorController.setPhase(Phase.Connecting)
-                open(endpoint, fresh.credentials, password)
+                open(device, fresh.credentials, password)
             }
             if (stopping) {
                 opened.close()
@@ -133,13 +141,25 @@ class MirrorService : Service() {
             }
             session = opened
 
-            val (width, height) = screenSize()
-            val (encodedWidth, encodedHeight) = ScreenEncoder.encodedSize(width, height)
+            val (width, height) = ScreenEncoder.canvasFor(opened.receiverDisplay)
             val dpi = resources.displayMetrics.densityDpi
-            encoder = ScreenEncoder(mp, opened, encodedWidth, encodedHeight, dpi) { reason ->
+            encoder = ScreenEncoder(mp, opened, width, height, dpi) { reason ->
                 finish(reason)
             }.also { it.start() }
-            Log.i(TAG, "mirroring ${width}x$height as ${encodedWidth}x$encodedHeight to ${device.displayName}")
+
+            val capture = audio
+            if (capture != null && opened.hasAudio) {
+                capture.attach(opened)
+            } else if (capture != null) {
+                Log.w(TAG, "screen audio not negotiated: ${opened.audioFailure}")
+                audio = null
+                capture.stop()
+            }
+            Log.i(
+                TAG,
+                "mirroring as ${width}x$height (receiver display ${opened.receiverDisplay}) to ${device.displayName}, " +
+                    "audio=${opened.hasAudio}" + (opened.audioFailure?.let { " ($it)" } ?: ""),
+            )
             MirrorController.setPhase(Phase.Mirroring)
         } catch (e: MirrorSession.Failure.Refused) {
             Log.w(TAG, "mirroring refused", e)
@@ -160,30 +180,35 @@ class MirrorService : Service() {
         }
     }
 
-    private fun open(endpoint: tw.avianjay.airplaydroid.protocol.Endpoint, credentials: HomeKitPairing.Credentials, password: String?) =
-        MirrorSession.open(endpoint, credentials, password, Build.MODEL) { reason -> finish(reason) }
-
-    @Suppress("DEPRECATION")
-    private fun screenSize(): Pair<Int, Int> {
-        val display = getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
-        val metrics = DisplayMetrics().also { display.getRealMetrics(it) }
-        return metrics.widthPixels to metrics.heightPixels
-    }
+    private fun open(
+        device: tw.avianjay.airplaydroid.protocol.AirPlayDevice,
+        credentials: HomeKitPairing.Credentials,
+        password: String?,
+    ) = MirrorSession.open(
+        requireNotNull(device.videoEndpoint), credentials, password, Build.MODEL,
+        withAudio = audio != null,
+        features = device.airPlayTxt?.features?.raw ?: 0uL,
+    ) { reason -> finish(reason) }
 
     /** Idempotent. [error] null means the user ended it. Safe from any thread. */
     private fun finish(error: String?) {
         if (stopping) return
         stopping = true
+        // The only record of why a session ended once the snackbar is gone.
+        Log.i(TAG, "mirroring ended: " + (error ?: "stopped by the user or the system"), Throwable("finish() caller"))
         main.post {
             val e = encoder
+            val a = audio
             val s = session
             val p = projection
             encoder = null
+            audio = null
             session = null
             projection = null
             // Network teardown must not run on the main thread.
             Thread({
                 runCatching { e?.stop() }
+                runCatching { a?.stop() }
                 runCatching { s?.close() }
             }, "mirror-teardown").start()
             runCatching { p?.stop() }
