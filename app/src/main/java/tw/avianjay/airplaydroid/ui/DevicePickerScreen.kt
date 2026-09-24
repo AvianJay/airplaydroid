@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -301,7 +302,7 @@ private fun DeviceRow(
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
-                CapabilityBadges(device.capabilities)
+                CapabilityBadges(device.capabilities.filterNot { it in ConnectionBadges })
             }
         },
         trailingContent = {
@@ -643,16 +644,25 @@ private fun formatTime(seconds: Double): String {
 }
 
 /**
+ * Not shown as badges: how to get in is the tap's business now -- it asks for
+ * the password when one is needed -- and the row's status says when it cannot.
+ */
+private val ConnectionBadges = setOf(DeviceCapability.NeedsPassword, DeviceCapability.NeedsPin)
+
+/**
  * Read-only badges. Deliberately NOT AssistChip(enabled = false): a disabled chip
  * is a button that cannot be pressed, so it renders greyed out and TalkBack
  * announces it as "disabled". These are labels, not controls.
+ *
+ * A FlowRow of single-line labels: in a plain Row the badges that do not fit
+ * are squeezed instead, and their text breaks a word per line.
  */
 @Composable
 private fun CapabilityBadges(capabilities: List<DeviceCapability>) {
     if (capabilities.isEmpty()) return
-    Row(
+    FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier.padding(top = 4.dp),
     ) {
         capabilities.forEach { capability ->
@@ -664,6 +674,8 @@ private fun CapabilityBadges(capabilities: List<DeviceCapability>) {
                 Text(
                     text = capability.label,
                     style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    softWrap = false,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                 )
             }
