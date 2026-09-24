@@ -8,14 +8,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
 import tw.avianjay.airplaydroid.service.MirrorService
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 data class MirrorUiState(
     val device: AirPlayDevice? = null,
     val phase: Phase = Phase.Idle,
     val error: String? = null,
 ) {
-    enum class Phase { Idle, AwaitingConsent, Pairing, Connecting, Mirroring }
+    enum class Phase { Idle, AwaitingConsent, AwaitingPin, Pairing, Connecting, Mirroring }
 
     val active: Boolean get() = phase != Phase.Idle
 }
@@ -73,12 +76,8 @@ object MirrorController {
                 "iPhones, iPads and Macs can mirror to it; this app cannot."
         }
         if (hasSavedPairing) return null
-        if (txt.flags.pairingRequired || txt.flags.pinRequired) {
-            return "Mirroring to a receiver that shows a PIN is not supported yet. " +
-                "Set its AirPlay access to require a password instead."
-        }
-        // Password receivers pair persistently with it; everything else left here
-        // has no password or PIN and is mirrored to with transient pairing.
+        // Password receivers pair with the password, PIN receivers (bits 3, 9) with
+        // a code shown on screen, and the rest transiently.
         return null
     }
 
@@ -170,7 +169,33 @@ object MirrorController {
         _state.update { if (it.phase == MirrorUiState.Phase.Idle) it else it.copy(phase = phase, error = null) }
     }
 
+    @Volatile private var pinReply: CompletableFuture<String?>? = null
+
+    /**
+     * Blocks the service's setup thread until the user enters the code the
+     * receiver is showing, or gives up (null: cancelled, stopped, or [timeoutMs]
+     * passed). The picker shows its PIN dialog while the phase is AwaitingPin.
+     */
+    internal fun awaitPin(timeoutMs: Long): String? {
+        val reply = CompletableFuture<String?>()
+        pinReply = reply
+        setPhase(MirrorUiState.Phase.AwaitingPin)
+        return try {
+            reply.get(timeoutMs, TimeUnit.MILLISECONDS)?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (e: TimeoutException) {
+            null
+        } finally {
+            pinReply = null
+        }
+    }
+
+    fun submitPin(pin: String) {
+        pinReply?.complete(pin)
+    }
+
     internal fun ended(error: String?) {
+        // Nothing may stay blocked on a PIN for a session that is over.
+        pinReply?.complete(null)
         _state.update { MirrorUiState(device = it.device.takeIf { error != null }, error = error) }
     }
 

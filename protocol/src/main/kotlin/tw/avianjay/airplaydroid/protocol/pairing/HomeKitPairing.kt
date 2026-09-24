@@ -118,7 +118,6 @@ class HomeKitPairing(
 
         val m6 = exchange(
             Mode.PERSISTENT,
-            cseq = 2,
             body = Tlv8.encode(
                 Tlv8.STATE to Tlv8.byte(5),
                 Tlv8.ENCRYPTED_DATA to HapCrypto.seal(encryptKey, HapCrypto.labelNonce("PS-Msg05"), subTlv),
@@ -154,7 +153,6 @@ class HomeKitPairing(
     fun pairSetup(mode: Mode, password: String): ByteArray {
         val m2 = exchange(
             mode,
-            cseq = 0,
             body = Tlv8.encode(
                 buildList {
                     add(Tlv8.METHOD to Tlv8.byte(0))
@@ -173,7 +171,6 @@ class HomeKitPairing(
 
         val m4 = exchange(
             mode,
-            cseq = 1,
             body = Tlv8.encode(
                 Tlv8.STATE to Tlv8.byte(3),
                 Tlv8.PUBLIC_KEY to session.publicKey,
@@ -187,7 +184,36 @@ class HomeKitPairing(
         return session.sharedSecret
     }
 
-    private fun exchange(mode: Mode, cseq: Int, body: ByteArray, uri: String = "/pair-setup"): Map<Int, ByteArray> {
+    /**
+     * Asks the receiver to show a one-time PIN on its screen. For a receiver with
+     * `flags` bit 9 (or bit 3): what Apple TV does under "Allow Access" without a
+     * password, where every new device must enter the code once. Then call
+     * [pair] with the PIN, on this same connection.
+     *
+     * A receiver in password mode answers 200 here but shows nothing, so this is
+     * only for bit 9 / bit 3.
+     */
+    fun startPin() {
+        val response = connection.exchange(
+            AirPlayRequest(
+                method = "POST",
+                uri = "/pair-pin-start",
+                protocol = AirPlayRequest.RTSP_1_0,
+                headers = listOf(
+                    "X-Apple-HKP" to Mode.PERSISTENT.hkpHeader,
+                    "X-Apple-Client-ID" to clientId,
+                    "X-Apple-Client-Name" to clientName,
+                    "CSeq" to (nextCseq++).toString(),
+                ),
+                body = null,
+            )
+        )
+        if (!response.isSuccess) throw Failure.Refused(response.status)
+    }
+
+    private var nextCseq = 0
+
+    private fun exchange(mode: Mode, body: ByteArray, uri: String = "/pair-setup"): Map<Int, ByteArray> {
         val response = connection.exchange(
             AirPlayRequest(
                 method = "POST",
@@ -200,7 +226,7 @@ class HomeKitPairing(
                     "X-Apple-Client-Name" to clientName,
                     // The receiver expects this header even though the body is TLV8.
                     "Content-Type" to "application/x-apple-binary-plist",
-                    "CSeq" to cseq.toString(),
+                    "CSeq" to (nextCseq++).toString(),
                 ),
                 body = body,
             )
@@ -238,7 +264,6 @@ class HomeKitPairing(
 
         val m2 = exchange(
             Mode.PERSISTENT,
-            cseq = 0,
             uri = "/pair-verify",
             body = Tlv8.encode(
                 Tlv8.STATE to Tlv8.byte(1),
@@ -281,7 +306,6 @@ class HomeKitPairing(
 
         exchange(
             Mode.PERSISTENT,
-            cseq = 1,
             uri = "/pair-verify",
             body = Tlv8.encode(
                 Tlv8.STATE to Tlv8.byte(3),

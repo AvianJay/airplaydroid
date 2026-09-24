@@ -136,6 +136,12 @@ class MirrorService : Service() {
         ) {
             return connectTransient(device, mp)
         }
+        // A receiver that shows a code to each new device: pair with it once.
+        if (flags != null && (flags.pinRequired || flags.pairingRequired) && saved == null &&
+            typedPassword.isNullOrEmpty() && !MirrorController.wantsPassword(device)
+        ) {
+            return connectWithPin(device, mp)
+        }
         try {
             val password = typedPassword?.takeIf { it.isNotEmpty() } ?: saved?.password
 
@@ -312,6 +318,40 @@ class MirrorService : Service() {
         }
     }
 
+    /**
+     * A receiver in PIN mode with no saved pairing: it shows a code, the picker
+     * collects it, and the pairing is saved so the next session needs no code.
+     */
+    private fun connectWithPin(device: tw.avianjay.airplaydroid.protocol.AirPlayDevice, mp: MediaProjection) {
+        val store = PairingStore(this)
+        try {
+            MirrorController.setPhase(Phase.Pairing)
+            val credentials = MirrorSession.pairWithPin(requireNotNull(device.videoEndpoint)) {
+                MirrorController.awaitPin(PIN_TIMEOUT_MS)
+            } ?: return finish(error = null, why = "PIN entry cancelled or timed out")
+            store.save(device.key, PairingStore.Entry(credentials, null))
+            MirrorLog.write("paired with ${device.displayName} using its on-screen code")
+            if (synchronized(lock) { stopping }) return
+            MirrorController.setPhase(Phase.Connecting)
+            startStreaming(device, open(device, credentials, null), mp)
+        } catch (e: HomeKitPairing.Failure) {
+            Log.w(TAG, "PIN pairing failed", e)
+            val wrongCode = e is HomeKitPairing.Failure.Rejected &&
+                e.error == tw.avianjay.airplaydroid.protocol.pairing.Tlv8.PairError.AUTHENTICATION
+            finish(
+                if (wrongCode) "That code did not match the one on ${device.displayName}. Tap it to try again."
+                else "Could not pair with ${device.displayName}: ${e.message}",
+                why = "PIN pairing: ${e.message}",
+            )
+        } catch (e: MirrorSession.Failure.Refused) {
+            Log.w(TAG, "mirroring refused", e)
+            finish("${device.displayName} refused mirroring (${e.message}).", why = "refused: ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "mirroring failed", e)
+            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")
+        }
+    }
+
     /** A stable id for transient sessions, generated once per install. */
     private fun transientClientId(): String {
         val file = java.io.File(noBackupFilesDir, "transient-client-id")
@@ -401,6 +441,8 @@ class MirrorService : Service() {
         .build()
 
     companion object {
+        /** How long the TV's code is waited for; Apple TV keeps showing it about this long. */
+        private const val PIN_TIMEOUT_MS = 120_000L
         private const val TAG = "MirrorService"
         private const val CHANNEL_ID = "airplay_mirroring"
         private const val NOTIFICATION_ID = 2

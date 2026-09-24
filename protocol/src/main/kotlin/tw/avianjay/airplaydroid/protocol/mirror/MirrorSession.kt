@@ -409,6 +409,23 @@ class MirrorSession private constructor(
             SocketAirPlayConnection(endpoint).use { HomeKitPairing(it).pair(password) }
 
         /**
+         * Pairs with a receiver in PIN mode (`flags` bit 9 or 3): asks it to show a
+         * one-time code, then blocks in [awaitPin] until the user has read it off
+         * the screen. Returns null if [awaitPin] does (the user gave up). The code
+         * is used once; persist the credentials and [open] with them afterwards.
+         * Verified on an Apple TV 4K (tvOS 26.6) with Allow Access set but no
+         * password, where every new device must enter the code once.
+         */
+        fun pairWithPin(endpoint: Endpoint, awaitPin: () -> String?): HomeKitPairing.Credentials? =
+            // Held open while the user types: pin-start and pair-setup must share it.
+            SocketAirPlayConnection(endpoint, readTimeoutMs = 30_000).use { connection ->
+                val pairing = HomeKitPairing(connection)
+                pairing.startPin()
+                val pin = awaitPin() ?: return null
+                pairing.pair(pin)
+            }
+
+        /**
          * Establishes the session up to an open data channel. Throws
          * [HomeKitPairing.Failure] if the receiver no longer accepts [credentials]
          * (it was reset, or the pairing removed) and [Failure] for anything later.

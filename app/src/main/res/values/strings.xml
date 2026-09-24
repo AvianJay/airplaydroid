@@ -41,6 +41,7 @@
     <string name="mirror_notification_title">Mirroring to %1$s</string>
     <string name="mirror_status_consent">Waiting for screen capture permission…</string>
     <string name="mirror_status_pairing">Pairing…</string>
+    <string name="mirror_status_pin">Enter the code shown on the TV</string>
     <string name="mirror_status_connecting">Connecting…</string>
     <string name="mirror_status_mirroring">Mirroring your screen</string>
     <string name="mirror_password_title">Mirror to %1$s</string>

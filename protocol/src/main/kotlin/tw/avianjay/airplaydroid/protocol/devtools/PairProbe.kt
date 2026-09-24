@@ -12,6 +12,10 @@ import java.io.File
  *   PairProbe <host> <port> transient <password>
  *   PairProbe <host> <port> persistent <password> [credentials-file]
  *   PairProbe <host> <port> verify <credentials-file>
+ *   PairProbe <host> <port> pin <pin-file> <credentials-file>
+ *
+ * `pin` asks the receiver to show a PIN, waits (up to 3 minutes) for
+ * <pin-file> to contain it, then pairs persistently on the same connection.
  *
  * Persistent mode runs M1 -> M6 and, given a file, writes the credentials to it
  * as `key=hex` lines. That file holds a private key: keep it out of the repo.
@@ -28,6 +32,7 @@ object PairProbe {
         }
         val (host, port, mode, password) = args
         if (mode == "verify") return verify(host, port.toInt(), File(args[3]))
+        if (mode == "pin") return pinPair(host, port.toInt(), File(args[3]), File(args[4]))
 
         SocketAirPlayConnection(Endpoint(host, port.toInt())).use { connection ->
             val pairing = HomeKitPairing(connection)
@@ -47,6 +52,29 @@ object PairProbe {
                     }
                     else -> error("unknown mode $mode")
                 }
+            } catch (e: HomeKitPairing.Failure) {
+                println("FAILED: ${e.message}")
+            }
+        }
+    }
+
+    private fun pinPair(host: String, port: Int, pinFile: File, out: File) {
+        pinFile.delete()
+        SocketAirPlayConnection(Endpoint(host, port), readTimeoutMs = 200_000).use { connection ->
+            val pairing = HomeKitPairing(connection)
+            try {
+                pairing.startPin()
+                println("PIN requested: the receiver should now show a code. Waiting for ${pinFile.path}")
+                val deadline = System.currentTimeMillis() + 180_000
+                var pin: String? = null
+                while (pin == null && System.currentTimeMillis() < deadline) {
+                    pin = pinFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+                    if (pin == null) Thread.sleep(500)
+                }
+                if (pin == null) return println("FAILED: no PIN within 3 minutes")
+                val c = pairing.pair(pin)
+                out.writeText(c.encode())
+                println("M6 OK with PIN: receiver id=${String(c.receiverId)}; credentials written to ${out.path}")
             } catch (e: HomeKitPairing.Failure) {
                 println("FAILED: ${e.message}")
             }

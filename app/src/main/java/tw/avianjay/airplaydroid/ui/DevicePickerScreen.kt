@@ -181,6 +181,15 @@ fun DevicePickerScreen(
         )
     }
 
+    // The receiver is showing a one-time code; the service waits for it.
+    if (mirror.phase == MirrorUiState.Phase.AwaitingPin) {
+        PinDialog(
+            deviceName = mirror.device?.displayName.orEmpty(),
+            onDismiss = onStopMirror,
+            onConfirm = MirrorController::submitPin,
+        )
+    }
+
     passwordFor?.let { device ->
         MirrorPasswordDialog(
             device = device,
@@ -550,6 +559,7 @@ private fun MirrorBar(mirror: MirrorUiState, onStop: () -> Unit) {
                     text = stringResource(
                         when (mirror.phase) {
                             MirrorUiState.Phase.AwaitingConsent -> R.string.mirror_status_consent
+                            MirrorUiState.Phase.AwaitingPin -> R.string.mirror_status_pin
                             MirrorUiState.Phase.Pairing -> R.string.mirror_status_pairing
                             MirrorUiState.Phase.Connecting -> R.string.mirror_status_connecting
                             else -> R.string.mirror_status_mirroring
