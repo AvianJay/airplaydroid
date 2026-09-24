@@ -1,0 +1,25 @@
+# Machine-local SDK path
+local.properties
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+.cxx/
+captures/
+output.json
+
+# IDE
+.idea/*
+!.idea/codeStyles/
+*.iml
+.DS_Store
+
+# Kotlin 2.x build session scratch
+.kotlin/

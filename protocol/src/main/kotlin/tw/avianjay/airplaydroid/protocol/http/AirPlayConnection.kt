@@ -1,0 +1,81 @@
+package tw.avianjay.airplaydroid.protocol.http
+
+import tw.avianjay.airplaydroid.protocol.Endpoint
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.Closeable
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
+
+/**
+ * One control connection to a receiver. Blocking by design -- callers run it on
+ * an IO dispatcher. Kept as an interface so the protocol layer can be unit
+ * tested against a scripted peer with no sockets involved.
+ */
+interface AirPlayConnection : Closeable {
+    fun exchange(request: AirPlayRequest): AirPlayResponse
+}
+
+class SocketAirPlayConnection private constructor(
+    private val socket: Socket,
+) : AirPlayConnection {
+
+    private val input = BufferedInputStream(socket.getInputStream())
+    private val output = BufferedOutputStream(socket.getOutputStream())
+
+    /**
+     * Set once a request/response exchange fails part way through. The stream
+     * position is then unknown -- a subsequent exchange would read the tail of
+     * the previous response as its status line and report nonsense. Reusing a
+     * connection after a read failure is never safe, so we latch it closed.
+     */
+    private var poisoned = false
+
+    @Synchronized
+    override fun exchange(request: AirPlayRequest): AirPlayResponse {
+        if (poisoned) throw IOException("connection is no longer usable after an earlier failure")
+
+        try {
+            AirPlayHttp.write(output, request)
+            return AirPlayHttp.readResponse(input)
+        } catch (t: Throwable) {
+            poisoned = true
+            close()
+            throw t
+        }
+    }
+
+    override fun close() {
+        runCatching { socket.close() }
+    }
+
+    companion object {
+        const val DEFAULT_CONNECT_TIMEOUT_MS = 5_000
+        const val DEFAULT_READ_TIMEOUT_MS = 10_000
+
+        /**
+         * Connects, or throws without leaking the socket. Building the streams in
+         * a property initialiser would leak the descriptor if getInputStream()
+         * threw, because the constructor never completes and nothing holds a
+         * reference to close.
+         */
+        operator fun invoke(
+            endpoint: Endpoint,
+            connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS,
+            readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS,
+        ): SocketAirPlayConnection {
+            val socket = Socket()
+            try {
+                // Nagle would delay these small control messages behind each other.
+                socket.tcpNoDelay = true
+                socket.soTimeout = readTimeoutMs
+                socket.connect(InetSocketAddress(endpoint.host, endpoint.port), connectTimeoutMs)
+                return SocketAirPlayConnection(socket)
+            } catch (t: Throwable) {
+                runCatching { socket.close() }
+                throw t
+            }
+        }
+    }
+}

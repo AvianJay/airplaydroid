@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AirPlay receivers speak plain HTTP/RTSP on the LAN, so cleartext must be
+     permitted. Present from commit one even though milestone 1 opens no sockets,
+     because forgetting it later produces a confusing silent connect failure.
+
+     InsecureBaseConfiguration is suppressed deliberately: this app talks only to
+     local-network devices that do not offer TLS. It is the whole point of the app,
+     not an oversight. -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration" />
+</network-security-config>

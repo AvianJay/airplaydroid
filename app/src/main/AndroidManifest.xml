@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Socket access. At targetSdk <= 36 this is also what implicitly grants
+         local network access; ACCESS_LOCAL_NETWORK must NOT be declared until
+         targetSdk 37, where it becomes mandatory. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Required by the NsdManager.discoverServices(type, protocol, NetworkRequest,
+         Executor, listener) overload used on API 33+. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- PROTECTION_NORMAL, granted at install. Declaring it is what satisfies the
+         runtime prerequisite for the connectedDevice foreground service type, so
+         the service starts with zero runtime prompts. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- The only runtime permission in milestone 1. Requested in context; a denial
+         hides the notification but never blocks discovery. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Declared required=false so the Play Console does not implicitly filter the
+         app to Wi-Fi-capable devices only. -->
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AirPlayDroid"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.AirPlayDroid">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Owns the NsdManager lifecycle so the device list survives activity
+             recreation. connectedDevice is chosen over dataSync (6h/24h cap) and
+             mediaProjection (needs capture consent before startForeground). -->
+        <service
+            android:name=".service.AirPlaySessionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+    </application>
+
+</manifest>

@@ -1,0 +1,14 @@
+# Normalise line endings. Without this, `gradlew` committed from a Windows host
+# gets CRLF on checkout and fails on Linux/CI with:
+#   bad interpreter: /bin/sh^M
+* text=auto
+
+gradlew      text eol=lf
+*.sh         text eol=lf
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+
+*.jar        binary
+*.png        binary
+*.webp       binary
+*.keystore   binary

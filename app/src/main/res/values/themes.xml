@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose-only app: the platform Material theme is enough as a host theme.
+         There is no AppCompat or Material Components XML dependency, so this must
+         not inherit from Theme.MaterialComponents.* or Theme.AppCompat.*. -->
+    <style name="Theme.AirPlayDroid" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

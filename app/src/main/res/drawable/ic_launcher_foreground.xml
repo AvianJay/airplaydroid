@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Screen outline -->
+    <path
+        android:pathData="M32,32 L76,32 L76,62 L32,62 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round" />
+    <!-- Cast triangle -->
+    <path
+        android:pathData="M54,52 L70,78 L38,78 Z"
+        android:fillColor="#FFFFFF" />
+</vector>

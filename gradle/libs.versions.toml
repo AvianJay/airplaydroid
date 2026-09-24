@@ -1,0 +1,48 @@
+# Every version here was verified against the live repository before pinning.
+# Do NOT bump these to "newest stable" without re-checking AAR metadata:
+# Compose 1.12.0+, androidx.core 1.18.0+ and lifecycle 2.11.0+ all raise their
+# minCompileSdk above 36 and will hard-fail `checkDebugAarMetadata` on this machine
+# (installed platforms are android-31/33/34/35/36 only).
+
+[versions]
+# AGP 9.1.1 is the highest AGP the installed Android Studio 2025.3.2 "Panda 2" can
+# sync. Newer AGP builds fine from the CLI but breaks IDE sync.
+agp = "9.1.1"
+# Exactly the KGP that gradle-9.1.1.pom pins (verified). Matching it removes the
+# whole Compose-compiler/KGP mismatch failure class with no classpath override.
+kotlin = "2.2.10"
+# Last BOM before the Compose 1.12 line, which requires compileSdk 37.
+# 2026.06.01 pins ui/foundation/runtime 1.11.4 (minCompileSdk=35) + material3 1.4.0.
+composeBom = "2026.06.01"
+# 1.18.0+ requires compileSdk 36.1, which is not installed.
+androidxCore = "1.17.0"
+activityCompose = "1.13.0"
+# 2.11.0 requires compileSdk 37 AND AGP >= 9.2.0. Do not bump.
+lifecycle = "2.10.0"
+coroutines = "1.11.0"
+# Ed25519 is not on the Android platform below API 33; minSdk here is 26.
+bouncycastle = "1.86"
+
+[libraries]
+# androidx.core:core, NOT core-ktx -- core-ktx is an empty artifact from 1.19.0
+# onwards; all Kotlin extensions were merged into the main core library.
+androidx-core = { group = "androidx.core", name = "core", version.ref = "androidxCore" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

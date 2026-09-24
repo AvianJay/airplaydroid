@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlayDroid</string>
+
+    <string name="discovery_channel_name">Device discovery</string>
+    <string name="discovery_channel_description">Shown while AirPlayDroid is looking for AirPlay receivers on your network.</string>
+    <string name="discovery_notification_title">Looking for AirPlay devices</string>
+    <string name="discovery_notification_text">Scanning the local network</string>
+    <string name="discovery_notification_stop">Stop</string>
+
+    <string name="picker_title">AirPlay devices</string>
+    <string name="picker_scanning">Scanning the local network…</string>
+    <string name="picker_empty_title">No AirPlay devices found yet</string>
+    <string name="picker_empty_body">Make sure this phone and the receiver are on the same Wi-Fi network. Some routers block mDNS between wireless and wired clients.</string>
+
+    <string name="play_dialog_title">Play on %1$s</string>
+    <string name="play_dialog_url_label">Video URL</string>
+    <string name="play_dialog_password_label">AirPlay password</string>
+    <string name="play_dialog_pin_label">PIN shown on the TV</string>
+    <string name="play_dialog_hint">A direct link to a video file or an HLS (.m3u8) stream. The receiver fetches it itself — this phone does not relay the video.</string>
+    <string name="action_play">Play</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_pair">Pair</string>
+    <string name="pin_dialog_title">Pair with %1$s</string>
+    <string name="pin_dialog_body">The receiver is now showing a PIN on screen. Enter it here.</string>
+    <string name="playback_connecting">Connecting…</string>
+</resources>
