@@ -16,13 +16,17 @@ import java.util.UUID
  *
  * Which mode to use is dictated by the receiver's `flags`, not by preference:
  *
- * | `flags` bit | meaning              | mode                        |
- * |---|---|---|
- * | 7  | a password is set     | [Mode.TRANSIENT], `X-Apple-HKP: 4` |
- * | 9  | pairing required      | [Mode.PERSISTENT], `X-Apple-HKP: 3` |
+ * | `flags` bit | meaning              | mode                        | SRP password |
+ * |---|---|---|---|
+ * | 7  | a password is set     | [Mode.PERSISTENT], `X-Apple-HKP: 3` | the device password |
+ * | 9  | pairing required      | [Mode.PERSISTENT], `X-Apple-HKP: 3` | the on-screen PIN |
+ * | neither |                  | [Mode.TRANSIENT], `X-Apple-HKP: 4`  | [TRANSIENT_PASSWORD] |
  *
- * Sending the wrong one is refused with `470` even when everything else is
- * correct: a receiver in bit-9 mode rejects a transient M1 outright.
+ * Sending the wrong one is refused with `470` at M3, before the proof is even
+ * checked. An earlier version of this table mapped bit 7 to transient, which is
+ * exactly what produced the 470 against the Apple TV 4K; owntone's
+ * `response_handler_info_generic` has the correct mapping, and persistent mode
+ * with the device password was then confirmed to reach M4 on tvOS 26.6.
  *
  * Wire format confirmed against an Apple TV 4K on tvOS 26.6:
  * requests are `RTSP/1.0`, bodies are TLV8 despite a `Content-Type` header
@@ -126,6 +130,6 @@ class HomeKitPairing(
 
         /** Picks the mode the receiver's own flags demand. */
         fun modeFor(flags: StatusFlags): Mode =
-            if (flags.pairingRequired) Mode.PERSISTENT else Mode.TRANSIENT
+            if (flags.pairingRequired || flags.passwordRequired) Mode.PERSISTENT else Mode.TRANSIENT
     }
 }

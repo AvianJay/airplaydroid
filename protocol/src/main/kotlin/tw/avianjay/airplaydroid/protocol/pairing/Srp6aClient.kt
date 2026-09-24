@@ -65,20 +65,31 @@ class Srp6aClient(
             XMode.WITH_USERNAME -> sha512((username + ":" + password).toByteArray())
             XMode.PIN_ONLY -> sha512(password.toByteArray())
         }
-        val x = BigInteger(1, sha512(salt, inner))
+        val s = minimal(BigInteger(1, salt))
+        val x = BigInteger(1, sha512(s, inner))
         val u = BigInteger(1, sha512(pad(A), pad(B)))
 
         val S = B.subtract(k.multiply(g.modPow(x, N))).mod(N).modPow(a.add(u.multiply(x)), N)
-        val K = sha512(pad(S))
+        val K = sha512(minimal(S))
 
-        val hN = sha512(pad(N))
-        val hg = sha512(pad(g))
-        val xor = ByteArray(hN.size) { (hN[it].toInt() xor hg[it].toInt()).toByte() }
+        // Only k and u pad their inputs. Everything else is hashed in minimal
+        // big-endian form -- most visibly H(g), which is H(0x05), not H of a
+        // 384-byte padded g. This matches srptools, which pyatv uses successfully
+        // against Apple TVs; padding H(g) makes every M1 wrong and the receiver
+        // answers Error=Authentication even with the right password.
+        val xor = BigInteger(1, sha512(minimal(N))).xor(BigInteger(1, sha512(minimal(g))))
 
-        val m1 = sha512(xor, sha512(username.toByteArray()), salt, pad(A), pad(B), K)
-        val m2 = sha512(pad(A), m1, K)
+        val m1 = sha512(minimal(xor), sha512(username.toByteArray()), s, minimal(A), minimal(B), K)
+        val m2 = sha512(minimal(A), m1, K)
 
-        return Session(pad(A), m1, m2, K)
+        return Session(minimal(A), m1, m2, K)
+    }
+
+    /** Big-endian bytes with no sign byte and no leading zeros. */
+    private fun minimal(value: BigInteger): ByteArray {
+        val bytes = value.toByteArray()
+        val start = bytes.indexOfFirst { it != 0.toByte() }
+        return if (start <= 0) bytes else bytes.copyOfRange(start, bytes.size)
     }
 
     private fun pad(value: BigInteger): ByteArray {

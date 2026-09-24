@@ -121,7 +121,13 @@ class Srp6aClientTest {
         val salt = ByteArray(16) { it.toByte() }
 
         // --- server side ---
-        val x = BigInteger(1, h(salt, h("$username:$password".toByteArray())))
+        // Mirrors srptools (what pyatv pairs Apple TVs with): only k and u pad
+        // their inputs, everything else is hashed in minimal form. An earlier
+        // version padded H(g) on both sides here, so this test passed while
+        // the real Apple TV answered Error=Authentication.
+        fun min(v: BigInteger) = v.toByteArray().dropWhile { it == 0.toByte() }.toByteArray()
+        val s = min(BigInteger(1, salt))
+        val x = BigInteger(1, h(s, h("$username:$password".toByteArray())))
         val v = g.modPow(x, N)
         val k = BigInteger(1, h(pad(N), pad(g)))
         val b = BigInteger(1, ByteArray(32).also { SecureRandom().nextBytes(it) })
@@ -134,17 +140,16 @@ class Srp6aClientTest {
         val A = BigInteger(1, session.publicKey)
         val u = BigInteger(1, h(pad(A), pad(B)))
         val serverS = A.multiply(v.modPow(u, N)).mod(N).modPow(b, N)
-        val serverK = h(pad(serverS))
+        val serverK = h(min(serverS))
 
-        val hN = h(pad(N)); val hg = h(pad(g))
-        val xor = ByteArray(hN.size) { (hN[it].toInt() xor hg[it].toInt()).toByte() }
-        val expectedM1 = h(xor, h(username.toByteArray()), salt, pad(A), pad(B), serverK)
+        val xor = BigInteger(1, h(min(N))).xor(BigInteger(1, h(min(g))))
+        val expectedM1 = h(min(xor), h(username.toByteArray()), s, min(A), min(B), serverK)
 
         assertContentEquals(expectedM1, session.clientProof)
         assertContentEquals(serverK, session.sharedSecret)
 
         // and the server's reply is what the client is prepared to accept
-        assertContentEquals(h(pad(A), expectedM1, serverK), session.expectedServerProof)
+        assertContentEquals(h(min(A), expectedM1, serverK), session.expectedServerProof)
     }
 
     @Test
