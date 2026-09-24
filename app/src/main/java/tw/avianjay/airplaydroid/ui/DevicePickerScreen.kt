@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import tw.avianjay.airplaydroid.R
 import tw.avianjay.airplaydroid.discovery.AirPlayServiceType
 import tw.avianjay.airplaydroid.discovery.DiscoveryUiState
+import tw.avianjay.airplaydroid.mirror.MirrorUiState
 import tw.avianjay.airplaydroid.playback.PlaybackUiState
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
 import tw.avianjay.airplaydroid.protocol.DeviceCapability
@@ -63,6 +64,11 @@ fun DevicePickerScreen(
     onRefused: (String) -> Unit,
     onSubmitPin: (String) -> Unit,
     onCancelPin: () -> Unit,
+    mirror: MirrorUiState,
+    mirrorRefusalFor: (AirPlayDevice) -> String?,
+    hasSavedPairing: (AirPlayDevice) -> Boolean,
+    onMirror: (AirPlayDevice, String?) -> Unit,
+    onStopMirror: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var pendingDevice by remember { mutableStateOf<AirPlayDevice?>(null) }
@@ -84,6 +90,9 @@ fun DevicePickerScreen(
                         )
                     )
             ) {
+                if (mirror.active) {
+                    MirrorBar(mirror, onStopMirror)
+                }
                 if (playback.device != null) {
                     PlaybackBar(playback, onTogglePlayPause, onStop)
                 }
@@ -106,7 +115,9 @@ fun DevicePickerScreen(
                             device = device,
                             onClick = {
                                 val refusal = VideoHandoff.refusalFor(device)
-                                if (refusal != null) {
+                                // Open the dialog if either action is possible; it
+                                // enables only the buttons that are.
+                                if (refusal != null && mirrorRefusalFor(device) != null) {
                                     onRefused(refusal.message ?: "Cannot connect to this device.")
                                 } else {
                                     pendingDevice = device
@@ -131,10 +142,17 @@ fun DevicePickerScreen(
     pendingDevice?.let { device ->
         PlayUrlDialog(
             device = device,
+            canPlay = VideoHandoff.refusalFor(device) == null,
+            mirrorRefusal = mirrorRefusalFor(device),
+            hasSavedPairing = hasSavedPairing(device),
             onDismiss = { pendingDevice = null },
             onConfirm = { url, password ->
                 pendingDevice = null
                 onPlay(device, url, password)
+            },
+            onMirror = { password ->
+                pendingDevice = null
+                onMirror(device, password)
             },
         )
     }
@@ -182,8 +200,12 @@ private fun PinDialog(
 @Composable
 private fun PlayUrlDialog(
     device: AirPlayDevice,
+    canPlay: Boolean,
+    mirrorRefusal: String?,
+    hasSavedPairing: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (String, String?) -> Unit,
+    onMirror: (String?) -> Unit,
 ) {
     var url by rememberSaveable(device.key) { mutableStateOf("") }
     var password by rememberSaveable(device.key) { mutableStateOf("") }
@@ -222,18 +244,67 @@ private fun PlayUrlDialog(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 12.dp),
                 )
+                val mirrorNote = mirrorRefusal
+                    ?: if (hasSavedPairing) stringResource(R.string.mirror_saved_pairing) else null
+                if (mirrorNote != null) {
+                    Text(
+                        text = mirrorNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onConfirm(url, password.ifBlank { null }) },
-                enabled = url.isNotBlank() && (!needsPassword || password.isNotBlank()),
-            ) { Text(stringResource(R.string.action_play)) }
+            Row {
+                TextButton(
+                    onClick = { onMirror(password.ifBlank { null }) },
+                    // A saved pairing also saved the password; Digest still needs it.
+                    enabled = mirrorRefusal == null &&
+                        (!needsPassword || hasSavedPairing || password.isNotBlank()),
+                ) { Text(stringResource(R.string.action_mirror)) }
+                TextButton(
+                    onClick = { onConfirm(url, password.ifBlank { null }) },
+                    enabled = canPlay && url.isNotBlank() && (!needsPassword || password.isNotBlank()),
+                ) { Text(stringResource(R.string.action_play)) }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
+}
+
+@Composable
+private fun MirrorBar(mirror: MirrorUiState, onStop: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = mirror.device?.displayName.orEmpty(),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = stringResource(
+                        when (mirror.phase) {
+                            MirrorUiState.Phase.AwaitingConsent -> R.string.mirror_status_consent
+                            MirrorUiState.Phase.Pairing -> R.string.mirror_status_pairing
+                            MirrorUiState.Phase.Connecting -> R.string.mirror_status_connecting
+                            else -> R.string.mirror_status_mirroring
+                        }
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onStop) { Text(stringResource(R.string.action_stop)) }
+        }
+    }
 }
 
 @Composable

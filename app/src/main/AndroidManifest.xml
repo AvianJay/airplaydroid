@@ -18,6 +18,9 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Screen mirroring: the capture itself is gated by the per-session consent
+         prompt, which is what satisfies this type's runtime prerequisite. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <!-- The only runtime permission in milestone 1. Requested in context; a denial
          hides the notification but never blocks discovery. -->
@@ -56,6 +59,14 @@
             android:name=".service.AirPlaySessionService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Screen mirroring. Separate from the discovery service because a
+             MediaProjection can only be obtained from a service already in the
+             foreground as mediaProjection, entered after capture consent. -->
+        <service
+            android:name=".service.MirrorService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
     </application>
 

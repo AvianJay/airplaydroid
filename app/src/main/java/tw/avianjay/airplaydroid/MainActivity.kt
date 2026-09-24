@@ -2,6 +2,7 @@ package tw.avianjay.airplaydroid
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -15,6 +16,8 @@ import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tw.avianjay.airplaydroid.discovery.DiscoveryRepository
+import tw.avianjay.airplaydroid.mirror.MirrorController
+import tw.avianjay.airplaydroid.mirror.PairingStore
 import tw.avianjay.airplaydroid.playback.PlaybackController
 import tw.avianjay.airplaydroid.service.AirPlaySessionService
 import tw.avianjay.airplaydroid.ui.AirPlayDroidTheme
@@ -28,6 +31,11 @@ class MainActivity : ComponentActivity() {
             // discovery and the foreground service are unaffected.
         }
 
+    private val requestScreenCapture =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            MirrorController.onConsent(this, result.resultCode, result.data)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -39,6 +47,8 @@ class MainActivity : ComponentActivity() {
             AirPlayDroidTheme {
                 val discovery by DiscoveryRepository.state.collectAsStateWithLifecycle()
                 val playback by PlaybackController.state.collectAsStateWithLifecycle()
+                val mirror by MirrorController.state.collectAsStateWithLifecycle()
+                val pairings = remember { PairingStore(applicationContext) }
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 // Playback errors arrive asynchronously from the IO scope, so
@@ -47,6 +57,13 @@ class MainActivity : ComponentActivity() {
                     playback.error?.let { message ->
                         snackbarHostState.showSnackbar(message)
                         PlaybackController.dismissError()
+                    }
+                }
+
+                LaunchedEffect(mirror.error) {
+                    mirror.error?.let { message ->
+                        snackbarHostState.showSnackbar(message)
+                        MirrorController.dismissError()
                     }
                 }
 
@@ -63,6 +80,15 @@ class MainActivity : ComponentActivity() {
                         // Shown immediately: this is a local decision, no socket involved.
                         PlaybackController.reportRefusal(message)
                     },
+                    mirror = mirror,
+                    mirrorRefusalFor = { MirrorController.refusalFor(it, pairings.has(it.key)) },
+                    hasSavedPairing = { pairings.has(it.key) },
+                    onMirror = { device, password ->
+                        MirrorController.request(device, password)
+                        val manager = getSystemService(MediaProjectionManager::class.java)
+                        requestScreenCapture.launch(manager.createScreenCaptureIntent())
+                    },
+                    onStopMirror = { MirrorController.stop(this) },
                 )
             }
         }
