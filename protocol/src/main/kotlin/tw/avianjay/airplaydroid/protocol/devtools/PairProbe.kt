@@ -1,6 +1,7 @@
 package tw.avianjay.airplaydroid.protocol.devtools
 
 import tw.avianjay.airplaydroid.protocol.Endpoint
+import tw.avianjay.airplaydroid.protocol.http.AirPlayRequest
 import tw.avianjay.airplaydroid.protocol.http.SocketAirPlayConnection
 import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
 import java.io.File
@@ -10,6 +11,7 @@ import java.io.File
  *
  *   PairProbe <host> <port> transient <password>
  *   PairProbe <host> <port> persistent <password> [credentials-file]
+ *   PairProbe <host> <port> verify <credentials-file>
  *
  * Persistent mode runs M1 -> M6 and, given a file, writes the credentials to it
  * as `key=hex` lines. That file holds a private key: keep it out of the repo.
@@ -21,9 +23,11 @@ object PairProbe {
     @JvmStatic
     fun main(args: Array<String>) {
         require(args.size in 4..5) {
-            "usage: PairProbe <host> <port> <transient|persistent> <password> [credentials-file]"
+            "usage: PairProbe <host> <port> <transient|persistent> <password> [credentials-file]; " +
+                "       PairProbe <host> <port> verify <credentials-file>"
         }
         val (host, port, mode, password) = args
+        if (mode == "verify") return verify(host, port.toInt(), File(args[3]))
 
         SocketAirPlayConnection(Endpoint(host, port.toInt())).use { connection ->
             val pairing = HomeKitPairing(connection)
@@ -53,6 +57,39 @@ object PairProbe {
             }
         }
     }
+
+    private fun verify(host: String, port: Int, file: File) {
+        val fields = file.readLines().filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
+        val credentials = HomeKitPairing.Credentials(
+            clientId = fields.getValue("clientId"),
+            clientSeed = fields.getValue("clientSeed").unhex(),
+            receiverId = fields.getValue("receiverId").unhex(),
+            receiverPublicKey = fields.getValue("receiverPublicKey").unhex(),
+        )
+
+        SocketAirPlayConnection(Endpoint(host, port)).use { connection ->
+            try {
+                val session = HomeKitPairing(connection, clientId = credentials.clientId).verify(credentials)
+                println("verify OK: shared secret ${session.sharedSecret.size} bytes")
+                connection.enableEncryption(session.controlWriteKey, session.controlReadKey)
+
+                val info = connection.exchange(
+                    AirPlayRequest(
+                        method = "GET",
+                        uri = "/info",
+                        protocol = AirPlayRequest.RTSP_1_0,
+                        headers = listOf("CSeq" to "2", "User-Agent" to "AirPlay/960.13.1"),
+                        body = null,
+                    )
+                )
+                println("encrypted GET /info -> ${info.status} ${info.reason}, ${info.body.size} bytes")
+            } catch (e: HomeKitPairing.Failure) {
+                println("FAILED: ${e.message}")
+            }
+        }
+    }
+
+    private fun String.unhex() = ByteArray(length / 2) { substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 }

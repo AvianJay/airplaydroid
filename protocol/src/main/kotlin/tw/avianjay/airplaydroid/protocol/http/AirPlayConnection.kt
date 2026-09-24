@@ -5,6 +5,8 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.Closeable
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -21,8 +23,23 @@ class SocketAirPlayConnection private constructor(
     private val socket: Socket,
 ) : AirPlayConnection {
 
-    private val input = BufferedInputStream(socket.getInputStream())
-    private val output = BufferedOutputStream(socket.getOutputStream())
+    private var input: InputStream = BufferedInputStream(socket.getInputStream())
+    private var output: OutputStream = BufferedOutputStream(socket.getOutputStream())
+
+    /**
+     * Switches this connection to the HAP-encrypted framing that follows a
+     * successful pair-verify. Everything after this call, in both directions,
+     * is ChaCha20-Poly1305 framed; the RTSP text inside is unchanged.
+     *
+     * The existing buffered streams are wrapped rather than the raw socket ones,
+     * so nothing already buffered is lost. (The receiver sends nothing unasked,
+     * so in practice that buffer is empty here.)
+     */
+    @Synchronized
+    fun enableEncryption(writeKey: ByteArray, readKey: ByteArray) {
+        output = HapFrameOutputStream(output, writeKey)
+        input = BufferedInputStream(HapFrameInputStream(input, readKey))
+    }
 
     /**
      * Set once a request/response exchange fails part way through. The stream

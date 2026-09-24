@@ -54,7 +54,7 @@ class HomeKitPairing(
         class Rejected(val error: Tlv8.PairError) : Failure("receiver returned ${error.name}")
         class Malformed(val detail: String) : Failure("malformed pairing response: $detail")
         class ProofMismatch : Failure("the receiver's proof did not verify")
-        class SignatureMismatch : Failure("the receiver's M6 signature did not verify")
+        class SignatureMismatch : Failure("the receiver's signature did not verify")
     }
 
     /**
@@ -162,11 +162,11 @@ class HomeKitPairing(
         return session.sharedSecret
     }
 
-    private fun exchange(mode: Mode, cseq: Int, body: ByteArray): Map<Int, ByteArray> {
+    private fun exchange(mode: Mode, cseq: Int, body: ByteArray, uri: String = "/pair-setup"): Map<Int, ByteArray> {
         val response = connection.exchange(
             AirPlayRequest(
                 method = "POST",
-                uri = "/pair-setup",
+                uri = uri,
                 // RTSP/1.0, as a real sender uses -- not HTTP/1.1.
                 protocol = AirPlayRequest.RTSP_1_0,
                 headers = listOf(
@@ -186,6 +186,85 @@ class HomeKitPairing(
         val tlv = Tlv8.decode(response.body)
         Tlv8.errorOf(tlv)?.let { throw Failure.Rejected(it) }
         return tlv
+    }
+
+    /**
+     * The keys pair-verify establishes: one per direction for the encrypted
+     * control channel, plus the X25519 secret the stream keys derive from.
+     */
+    class Session(val sharedSecret: ByteArray) {
+        val controlWriteKey: ByteArray =
+            HapCrypto.hkdf("Control-Salt", "Control-Write-Encryption-Key", sharedSecret)
+        val controlReadKey: ByteArray =
+            HapCrypto.hkdf("Control-Salt", "Control-Read-Encryption-Key", sharedSecret)
+    }
+
+    /**
+     * Pair-verify, M1 -> M4, against credentials from an earlier [pair]. Each
+     * side signs both ephemeral X25519 keys with its long-term Ed25519 key, so
+     * neither can be impersonated by someone who merely saw the pairing.
+     *
+     * After this returns, the caller must switch the connection to encrypted
+     * framing with [Session.controlWriteKey] / [Session.controlReadKey] before
+     * sending anything else.
+     */
+    fun verify(credentials: Credentials): Session {
+        val ephemeral = HapCrypto.X25519KeyPair.generate()
+
+        val m2 = exchange(
+            Mode.PERSISTENT,
+            cseq = 0,
+            uri = "/pair-verify",
+            body = Tlv8.encode(
+                Tlv8.STATE to Tlv8.byte(1),
+                Tlv8.PUBLIC_KEY to ephemeral.publicKey,
+            ),
+        )
+
+        val receiverEphemeral = m2[Tlv8.PUBLIC_KEY] ?: throw Failure.Malformed("verify M2 carried no public key")
+        val sealed = m2[Tlv8.ENCRYPTED_DATA] ?: throw Failure.Malformed("verify M2 carried no encrypted data")
+
+        val shared = ephemeral.agree(receiverEphemeral)
+        val key = HapCrypto.hkdf("Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info", shared)
+
+        val accessory = try {
+            Tlv8.decode(HapCrypto.open(key, HapCrypto.labelNonce("PV-Msg02"), sealed))
+        } catch (e: org.bouncycastle.crypto.InvalidCipherTextException) {
+            throw Failure.Malformed("verify M2 did not decrypt: ${e.message}")
+        }
+        val receiverId = accessory[Tlv8.IDENTIFIER] ?: throw Failure.Malformed("verify M2 carried no identifier")
+        val signature = accessory[Tlv8.SIGNATURE] ?: throw Failure.Malformed("verify M2 carried no signature")
+
+        if (!receiverId.contentEquals(credentials.receiverId)) {
+            throw Failure.Malformed("verify M2 came from ${String(receiverId)}, not the paired receiver")
+        }
+        if (!HapCrypto.ed25519Verify(
+                credentials.receiverPublicKey,
+                receiverEphemeral + receiverId + ephemeral.publicKey,
+                signature,
+            )
+        ) {
+            throw Failure.SignatureMismatch()
+        }
+
+        val id = credentials.clientId.toByteArray()
+        val longTerm = HapCrypto.Ed25519KeyPair(credentials.clientSeed)
+        val inner = Tlv8.encode(
+            Tlv8.IDENTIFIER to id,
+            Tlv8.SIGNATURE to longTerm.sign(ephemeral.publicKey + id + receiverEphemeral),
+        )
+
+        exchange(
+            Mode.PERSISTENT,
+            cseq = 1,
+            uri = "/pair-verify",
+            body = Tlv8.encode(
+                Tlv8.STATE to Tlv8.byte(3),
+                Tlv8.ENCRYPTED_DATA to HapCrypto.seal(key, HapCrypto.labelNonce("PV-Msg03"), inner),
+            ),
+        )
+
+        return Session(shared)
     }
 
     companion object {
