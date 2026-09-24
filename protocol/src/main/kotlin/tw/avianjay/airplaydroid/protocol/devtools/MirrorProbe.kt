@@ -27,6 +27,9 @@ import kotlin.math.sin
  *  - `mirror.features=0x...` the receiver's feature bits (default: the test Apple TV's).
  *  - `mirror.dropSeq=N` withholds the N-th audio packet, to see whether the
  *    receiver asks for it again -- evidence it is parsing the audio stream.
+ *  - `mirror.holdSeconds=N` keeps the session open N seconds after the last
+ *    frame (default 3), sending only heartbeats and /feedback -- what a phone
+ *    with a static screen does when its encoder emits nothing.
  *
  * A receiver that cannot authenticate a video frame drops the data channel
  * within milliseconds, so "ended by receiver" before the file is done means failure.
@@ -77,8 +80,12 @@ object MirrorProbe {
         }
         tone?.join()
 
-        println("${t()} done; holding 3 s; audio retransmit requests so far: ${session.audioRetransmitRequests}")
-        Thread.sleep(3_000)
+        val hold = System.getProperty("mirror.holdSeconds")?.toLongOrNull() ?: 3L
+        println("${t()} done; holding $hold s; audio retransmit requests so far: ${session.audioRetransmitRequests}")
+        for (second in 1..hold) {
+            if (!session.isOpen) break
+            Thread.sleep(1_000)
+        }
         val survived = session.isOpen
         val retransmits = session.audioRetransmitRequests
         session.close()

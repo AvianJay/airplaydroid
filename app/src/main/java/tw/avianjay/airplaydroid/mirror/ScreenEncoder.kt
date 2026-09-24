@@ -25,8 +25,8 @@ import kotlin.concurrent.thread
  * Rotation: the canvas is a fixed landscape box matching the receiver's
  * display ([canvasFor]), never the phone's shape. Android fits the mirrored
  * screen into the VirtualDisplay keeping its aspect ratio and centred, so a
- * portrait phone arrives pillarboxed and a landscape one fills the frame --
- * what the TV would show anyway -- and turning the phone needs no encoder
+ * portrait phone arrives pillarboxed and a landscape one fills the width (a
+ * 20:9 phone gets thin bars top and bottom) -- what the TV would show anyway -- and turning the phone needs no encoder
  * restart and no mid-stream size change. (A MediaProjection may create only
  * one VirtualDisplay, so a resize would have to reuse it; this avoids that.)
  */
