@@ -28,17 +28,19 @@ import kotlin.test.assertTrue
 class LegacySessionEndToEndTest {
 
     /**
-     * A responder that satisfies the mock receiver, standing in for the real
-     * FairPlay core.
+     * A responder that satisfies the mock receiver, isolating these tests from
+     * the FairPlay core.
      *
      * The mock accepts any response from a local SAP it has not seen before, so
      * the value does not matter -- what matters is that these tests exercise the
      * **session** (framing, `/stream.xml`, the key wrap, `POST /stream`, the
      * packet format), not the crypto.
      *
-     * The real responder cannot be used here: its Phase 2 is unimplemented and
-     * throws (see `docs/fairplay-status.md`). Using it would make these tests
-     * fail for a reason that has nothing to do with what they check.
+     * The real [tw.avianjay.airplaydroid.protocol.fairplay.FairPlayResponderImpl]
+     * works and is verified elsewhere (142/142 full-chain vectors, 12/12
+     * hardware-attested, and a live receiver accepting it). It is deliberately not
+     * used here: if it regressed, these tests would fail for a reason unrelated to
+     * what they check, and the session's own failures would be harder to read.
      */
     private val stubResponder = FairPlayResponder { _, challenge ->
         ByteArray(20) { challenge[it] }

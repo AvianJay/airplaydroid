@@ -90,8 +90,9 @@ class FairPlayFullChainGoldenTest {
     /**
      * The whole chain, every vector.
      *
-     * Fails loudly today because Phase 2 is missing; passing this is the
-     * definition of done for the FairPlay response core.
+     * This is the definition of done for the FairPlay response core: Phase 1,
+     * the bridge and Phase 2 together, against a corpus produced by a separate
+     * implementation.
      */
     @Test
     fun `every challenge maps to its golden response`() {

@@ -10,15 +10,17 @@ import kotlin.test.assertNotEquals
  *
  * ### These tests used to pass, and that was the problem
  *
- * They asserted that the responder returned 20 deterministic bytes that depended
- * on both inputs. It did -- but those bytes were Phase 1's bridge output, not the
- * response, so every receiver rejected them. The tests were satisfied by a wrong
- * implementation, because they checked *shape* (20 bytes, input-dependent) rather
- * than *value*.
+ * They once asserted that the responder returned 20 deterministic bytes that
+ * depended on both inputs. It did -- but those bytes were Phase 1's bridge output,
+ * not the response, so every receiver rejected them. The tests were satisfied by a
+ * wrong implementation, because they checked *shape* (20 bytes, input-dependent)
+ * rather than *value*.
  *
- * The only test that can catch that is the full-chain corpus
- * ([FairPlayFullChainGoldenTest]) or hardware. These tests now pin the honest
- * current state: the responder reaches the missing Phase 2 and says so.
+ * The lesson is kept because it is the whole reason the bug survived: only an
+ * oracle spanning the chain can see it. The responder is now pinned against the
+ * published golden value for the all-zero challenge
+ * ([FairPlayFullChainGoldenTest] covers all 142, and
+ * [FairPlayHardwareAttestedTest] covers the session-aware path).
  */
 class FairPlayResponderImplTest {
 
@@ -89,9 +91,9 @@ class FairPlayResponderImplTest {
     /**
      * Phase 1 and the bridge are still correct and still worth pinning.
      *
-     * They are what Phase 2 will consume, and they are independently verified
-     * against upstream's own corpora -- so this records that the *missing* piece
-     * is Phase 2 and nothing upstream of it.
+     * They are what Phase 2 consumes, and they are independently verified against
+     * upstream's own corpora. This also records *why* Phase 2 cannot be skipped:
+     * the bridge output is an input to it, not the answer.
      */
     @Test
     fun `phase 1 and the bridge still produce the verified intermediate`() {
@@ -101,14 +103,14 @@ class FairPlayResponderImplTest {
         val x9 = FairPlaySapCore.bridgeX9HeadForSap(ByteArray(128).also { it[1] = 0x01 }, gp)
         assertEquals(FairPlayPhase2.X9_BYTES, x9.size)
 
-        // Phase 2 must not be an identity: if x9 already equalled the response,
-        // this project would work and the whole gap would be imaginary.
+        // Phase 2 is not an identity: x9Data differs from the response. Returning
+        // it directly is exactly the bug that made every receiver reject our m3.
         val goldenForAllZeroChallenge = hex("6f627565f3e77f5b5ede91beee7baf92e4241e0b")
         val x9ForAllZero = FairPlaySapCore.bridgeX9HeadForSap(ByteArray(128), FairPlayWhiteBox.phase1(ByteArray(128)))
         assertNotEquals(
             goldenForAllZeroChallenge.joinToString("") { "%02x".format(it) },
             x9ForAllZero.joinToString("") { "%02x".format(it) },
-            "Phase 2 is not an identity, so it is genuinely missing",
+            "Phase 2 is not an identity, so it cannot be skipped",
         )
     }
 }
