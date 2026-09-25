@@ -45,6 +45,11 @@ class LegacyTimingServer(preferredPort: Int = PREFERRED_PORT) : Closeable {
     /** How many queries have been answered: zero means the receiver never asked. */
     val answered = AtomicInteger()
 
+    /** Packets that were neither format, and the start of the last one, for diagnosis. */
+    val ignored = AtomicInteger()
+    @Volatile var lastIgnored: String? = null
+        private set
+
     init {
         thread(isDaemon = true, name = "legacy-timing") {
             val buffer = ByteArray(128)
@@ -56,7 +61,13 @@ class LegacyTimingServer(preferredPort: Int = PREFERRED_PORT) : Closeable {
                     break
                 }
                 val received = nowNtp()
-                val reply = reply(buffer.copyOf(packet.length), received) ?: continue
+                val reply = reply(buffer.copyOf(packet.length), received)
+                if (reply == null) {
+                    ignored.incrementAndGet()
+                    lastIgnored = "${packet.length} bytes from ${packet.socketAddress}: " +
+                        buffer.copyOf(minOf(packet.length, 16)).joinToString("") { "%02x".format(it) }
+                    continue
+                }
                 runCatching {
                     socket.send(DatagramPacket(reply, reply.size, packet.socketAddress))
                     answered.incrementAndGet()

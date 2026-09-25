@@ -258,10 +258,14 @@ class MirrorService : Service() {
         typedPassword: String?,
         mp: MediaProjection,
     ) {
-        val endpoint = device.videoEndpoint
-            ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
+        // The _airplay._tcp port first, as on every Apple TV; the _raop._tcp port
+        // when that one does not speak RTSP (AirScreen: 57000 vs 5000).
+        val candidates = listOfNotNull(device.videoEndpoint, device.raopEndpoint).distinct()
+        if (candidates.isEmpty()) return finish("No address for ${device.displayName}.", why = "no endpoint")
         try {
             MirrorController.setPhase(Phase.Connecting)
+            val endpoint = LegacyMirrorSessionFactory.findRtspEndpoint(candidates) ?: candidates.first()
+            if (candidates.size > 1) MirrorLog.write("legacy: candidates $candidates, using $endpoint")
             val keys = LegacyVideoKeyStore(this)
             val opened = LegacyMirrorSessionFactory.connect(
                 host = endpoint.host,

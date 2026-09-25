@@ -59,7 +59,14 @@ object DiscoveryRepository {
         manual += device.key
         unconfirmed.removeAll { it.first == device.key }
         val existing = devices[device.key]
-        devices[device.key] = existing?.mergeWith(device) ?: device
+        // Discovery's view of an already-listed receiver wins, except for the
+        // address the user typed: the mDNS instance name is the one the receiver
+        // was given (AirScreen's /info calls every instance "Apple TV"), and its
+        // TXT record is the real one rather than a mapping of /info.
+        devices[device.key] = existing?.copy(
+            airPlayEndpoint = device.airPlayEndpoint ?: existing.airPlayEndpoint,
+            airPlayTxt = existing.airPlayTxt ?: device.airPlayTxt,
+        ) ?: device
         publishDevices()
     }
 

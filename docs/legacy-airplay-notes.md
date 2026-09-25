@@ -40,7 +40,7 @@ such a receiver takes the legacy path instead.
 |---|---|---|---|
 | **LonelyScreen** (Windows) | `192.168.31.51:7000` | **fresh, random per session** | **accepts our m3 (m4)** |
 | **iPhoneMirror 1.8.3** (Windows, `airplay2dll`) | `192.168.31.51:5001` | fresh | **accepts our m3 (m4)** |
-| AirScreen 2.15.1 (Android) | `192.168.31.141:5000` | static | 12-byte refusal frame |
+| AirScreen 2.15.1 (Android) | `192.168.31.141:5000` | static | m4 since the m3 fix; first `SETUP` unanswered (see below) |
 | AS-2112123AG dongle | (via phone tunnel) | static | 12-byte refusal frame |
 
 **LonelyScreen is the best target**: directly reachable, and it issues a *fresh*
@@ -144,6 +144,32 @@ header styles; iPhoneMirror was only tried with this one.
   every JVM test. Fixed in `XmlPlist`.
 - LonelyScreen crashed (access violation) once on an early emulator stream; not
   reproduced after the codec-resend and header changes, cause unknown.
+
+### AirScreen: two services, two ports (2026-09-25)
+
+AirScreen 2.15.1 (in BlueStacks) advertises:
+
+| mDNS | name | port | behaviour |
+|---|---|---|---|
+| `_airplay._tcp` | `AS-NE2211[AirPlay]` | 57000 | NanoHttpd; closes any RTSP request without a byte |
+| `_raop._tcp` | `567752140285@AS-NE2211[AirPlay]` | 5000 | the RTSP server: `/info`, pairing, FairPlay |
+
+The name is AirScreen's: `AS-` plus the host's model, with `[AirPlay]` appended
+while its "show protocol" setting is on. Its `/info`, however, calls every
+instance "Apple TV". So the "AS-2112123AG dongle" in older notes, which "did not
+even answer /info" on 57000, was almost certainly AirScreen running on a phone
+with model number 2112123AG, probed on the wrong port.
+
+The legacy path now tries the `_airplay._tcp` port and then the `_raop._tcp`
+port, and uses the first that answers `GET /info` over RTSP
+(`LegacyMirrorSessionFactory.findRtspEndpoint`). A manual add of a receiver that
+discovery already lists keeps the discovered name and TXT record.
+
+**Open:** on port 5000 AirScreen completes pair-verify and FairPlay, then never
+answers the first `SETUP` -- with our full body, with RPiPlay's minimal one, with
+iOS headers, and without pair-verify. It sent no clock queries meanwhile. Only
+tested with the sender inside the same emulator as AirScreen, so a same-host
+restriction is not ruled out; its m4 echo does not prove it accepted our m3.
 
 ### How the stream was checked when a receiver showed nothing
 

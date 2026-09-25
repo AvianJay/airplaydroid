@@ -301,8 +301,10 @@ class LegacyRtspMirrorSession private constructor(
                 val sessionId = random.nextLong() and Long.MAX_VALUE
                 val controlUri = "rtsp://${endpoint.host}/$sessionId"
 
-                // ---- 4. Keys and timing.
-                val keys = requester.request(
+                // ---- 4. Keys and timing. Some receivers query our clock before
+                // they answer this, so a timeout here is worth tracing with it.
+                val keys = try {
+                    requester.request(
                     "SETUP", controlUri,
                     PlistValue.dict(
                         "deviceID" to PlistValue.PString(deviceId),
@@ -322,6 +324,13 @@ class LegacyRtspMirrorSession private constructor(
                         "osBuildVersion" to PlistValue.PString("16G77"),
                     ),
                 )
+                } catch (e: IOException) {
+                    trace(
+                        "SETUP keys failed (${e.message}); clock queries answered ${timing.answered.get()}, " +
+                            "ignored ${timing.ignored.get()} (last: ${timing.lastIgnored})"
+                    )
+                    throw e
+                }
                 trace("SETUP keys -> ${describe(keys)}")
                 if (!keys.isSuccess) throw Failure.Refused("SETUP (keys)", keys.status)
 

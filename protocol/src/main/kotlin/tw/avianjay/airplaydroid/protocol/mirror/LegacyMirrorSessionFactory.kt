@@ -7,6 +7,7 @@ import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayRecords
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayResponder
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayResponderImpl
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlaySapSession
+import tw.avianjay.airplaydroid.protocol.http.AirPlayRequest
 import tw.avianjay.airplaydroid.protocol.http.SocketAirPlayConnection
 import tw.avianjay.airplaydroid.protocol.pairing.LegacyPairVerify
 import java.io.Closeable
@@ -263,4 +264,34 @@ object LegacyMirrorSessionFactory {
     const val LATENCY_MS = 100
 
     private const val HTTP_UNAUTHORIZED = 401
+
+    /**
+     * The first of [candidates] that answers `GET /info` as an RTSP server, or
+     * null if none does.
+     *
+     * A receiver's two services do not always share a port. AirScreen advertises
+     * `_airplay._tcp` on 57000, which accepts a connection and closes it without
+     * a word, and serves RTSP -- `/info`, FairPlay, mirroring -- only on its
+     * `_raop._tcp` port, 5000. Apple TVs and the RPiPlay family put both on one
+     * port, so for them this changes nothing.
+     *
+     * Any RTSP status counts, a 401 included: the question is which port speaks
+     * the protocol, not whether this sender is welcome. An HTTP answer does not
+     * count (AirScreen's port 7000 answers RTSP with `HTTP/1.1 404`).
+     */
+    fun findRtspEndpoint(candidates: List<Endpoint>, timeoutMs: Int = 3_000): Endpoint? =
+        candidates.distinct().firstOrNull { endpoint ->
+            runCatching {
+                SocketAirPlayConnection(endpoint, connectTimeoutMs = timeoutMs, readTimeoutMs = timeoutMs).use {
+                    it.exchange(
+                        AirPlayRequest(
+                            method = "GET",
+                            uri = "/info",
+                            protocol = AirPlayRequest.RTSP_1_0,
+                            headers = listOf("CSeq" to "1", "User-Agent" to FairPlaySapSession.USER_AGENT),
+                        )
+                    ).protocol.startsWith("RTSP/")
+                }
+            }.getOrDefault(false)
+        }
 }
