@@ -2,6 +2,8 @@ package tw.avianjay.airplaydroid.protocol.mirror
 
 import tw.avianjay.airplaydroid.protocol.Endpoint
 import tw.avianjay.airplaydroid.protocol.http.AirPlayRequest
+import tw.avianjay.airplaydroid.protocol.http.AirPlayResponse
+import tw.avianjay.airplaydroid.protocol.http.DigestAuth
 import tw.avianjay.airplaydroid.protocol.http.SocketAirPlayConnection
 import tw.avianjay.airplaydroid.protocol.plist.BinaryPlist
 import tw.avianjay.airplaydroid.protocol.plist.PlistValue
@@ -37,6 +39,18 @@ import java.io.Closeable
  */
 class LegacyMirrorSession(
     private val endpoint: Endpoint,
+    /**
+     * The receiver's AirPlay password, when it has one.
+     *
+     * A password-protected AirPlay 1 receiver answers an unauthenticated request
+     * with `401` plus a `WWW-Authenticate: Digest realm="AirPlay"` challenge, and
+     * expects the standard Digest response. This is **not** SRP pairing: the nto
+     * spec's "Password Protection" section is explicit that AirPlay 1 passwords
+     * are plain HTTP Digest, realm `AirPlay`, username `AirPlay`.
+     *
+     * Null means no password, which is the common case for a dongle.
+     */
+    private val password: String? = null,
     private val connectTimeoutMs: Int = SocketAirPlayConnection.DEFAULT_CONNECT_TIMEOUT_MS,
     private val readTimeoutMs: Int = SocketAirPlayConnection.DEFAULT_READ_TIMEOUT_MS,
 ) : Closeable {
@@ -144,18 +158,35 @@ class LegacyMirrorSession(
 
         val connection = SocketAirPlayConnection(endpoint, connectTimeoutMs, readTimeoutMs)
         try {
-            connection.write(
-                AirPlayRequest(
+            if (password == null) {
+                // No password: write and go. The receiver does not answer before
+                // the stream starts, and reading here would block.
+                connection.write(
+                    AirPlayRequest(
+                        method = "POST",
+                        uri = "/stream",
+                        protocol = AirPlayRequest.HTTP_1_1,
+                        headers = listOf(
+                            "User-Agent" to USER_AGENT,
+                            "Content-Type" to CONTENT_TYPE_BPLIST,
+                        ),
+                        body = body,
+                    )
+                )
+            } else {
+                // With a password the receiver may answer `401` first, and that
+                // answer has to be read before the socket can become a stream.
+                val response = exchangeWithDigest(
+                    connection,
                     method = "POST",
                     uri = "/stream",
-                    protocol = AirPlayRequest.HTTP_1_1,
-                    headers = listOf(
-                        "User-Agent" to USER_AGENT,
-                        "Content-Type" to CONTENT_TYPE_BPLIST,
-                    ),
                     body = body,
+                    contentType = CONTENT_TYPE_BPLIST,
                 )
-            )
+                if (!response.isSuccess) {
+                    throw Failure("POST /stream -> ${response.status} ${response.reason}")
+                }
+            }
         } catch (t: Throwable) {
             runCatching { connection.close() }
             throw Failure("POST /stream failed: ${t.message}")
@@ -190,20 +221,71 @@ class LegacyMirrorSession(
 
     override fun close() = Unit
 
+    /**
+     * One request, retried once with Digest if the receiver asks for it.
+     *
+     * A password-protected AirPlay 1 receiver answers the first request with
+     * `401` and a `WWW-Authenticate: Digest realm="AirPlay"` challenge. The
+     * standard response is then sent on the **same connection**, which is why
+     * this is a single `use` block rather than two calls.
+     *
+     * When [password] is null the challenge is not answered, and the 401 surfaces
+     * to the caller -- which is correct: silently retrying without credentials
+     * would just fail twice.
+     */
+    private fun exchangeWithDigest(
+        connection: SocketAirPlayConnection,
+        method: String,
+        uri: String,
+        body: ByteArray?,
+        contentType: String? = null,
+    ): AirPlayResponse {
+        fun request(authorization: String?) = AirPlayRequest(
+            method = method,
+            uri = uri,
+            protocol = AirPlayRequest.HTTP_1_1,
+            headers = buildList {
+                add("User-Agent" to USER_AGENT)
+                contentType?.let { add("Content-Type" to it) }
+                authorization?.let { add("Authorization" to it) }
+            },
+            body = body,
+        )
+
+        val first = connection.exchange(request(null))
+        if (first.status != HTTP_UNAUTHORIZED || password == null) return first
+
+        val challenge = DigestAuth.Challenge.parse(first.header("WWW-Authenticate"))
+            ?: return first
+        val authorization = DigestAuth.authorization(
+            challenge,
+            method,
+            uri,
+            password,
+            username = DIGEST_USERNAME,
+        )
+        return connection.exchange(request(authorization))
+    }
+
     private fun exchange(method: String, uri: String) =
         SocketAirPlayConnection(endpoint, connectTimeoutMs, readTimeoutMs).use { connection ->
-            connection.exchange(
-                AirPlayRequest(
-                    method = method,
-                    uri = uri,
-                    protocol = AirPlayRequest.HTTP_1_1,
-                    headers = listOf("User-Agent" to USER_AGENT),
-                    body = null,
-                )
-            )
+            exchangeWithDigest(connection, method, uri, body = null)
         }
 
     companion object {
+        /**
+         * The Digest username a legacy receiver expects.
+         *
+         * The nto spec's Password Protection table lists realm `AirPlay` and
+         * username `AirPlay` for the AirPlay service (the AirTunes service uses
+         * realm `raop`, username `iTunes`). A receiver derives HA1 from whatever
+         * we send, so this must match what it stored.
+         */
+        const val DIGEST_USERNAME = "AirPlay"
+
+        /** The status that carries a Digest challenge. */
+        const val HTTP_UNAUTHORIZED = 401
+
         /** The version a legacy receiver reports; matches the captures. */
         const val USER_AGENT = "AirPlay/220.68"
 

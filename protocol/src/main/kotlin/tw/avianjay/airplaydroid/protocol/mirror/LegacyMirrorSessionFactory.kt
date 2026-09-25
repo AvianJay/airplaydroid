@@ -87,12 +87,14 @@ object LegacyMirrorSessionFactory {
         random: SecureRandom = SecureRandom(),
         responder: FairPlayResponder = FairPlayResponderImpl,
     ): Opened {
-        if (!password.isNullOrEmpty()) {
-            throw Failure(
-                "legacy pairing with an AirPlay password is not implemented yet; " +
-                    "this receiver needs it before FairPlay"
-            )
-        }
+        // A password-protected receiver is handled by HTTP Digest on the mirroring
+        // endpoint, not by SRP pairing: the nto spec's "Password Protection"
+        // section says AirPlay 1 passwords are plain Digest, realm `AirPlay`,
+        // username `AirPlay`. [password] is passed straight to the session, which
+        // answers the 401 challenge.
+        //
+        // Note the FairPlay handshake itself is unauthenticated -- the receiver
+        // asks for credentials on the mirroring endpoint, not on /fp-setup.
 
         // --- 1. FairPlay SAP, on the RTSP port.
         val result: FairPlaySapSession.Result
@@ -113,7 +115,7 @@ object LegacyMirrorSessionFactory {
         val challenge = result.challenge
 
         // --- 2. The mirroring endpoint's display description.
-        val mirror = LegacyMirrorSession(Endpoint(host, streamPort))
+        val mirror = LegacyMirrorSession(Endpoint(host, streamPort), password = password)
         val info = try {
             mirror.streamInfo()
         } catch (e: Exception) {

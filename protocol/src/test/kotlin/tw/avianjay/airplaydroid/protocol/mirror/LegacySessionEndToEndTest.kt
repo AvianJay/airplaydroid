@@ -199,20 +199,30 @@ class LegacySessionEndToEndTest {
     }
 
     @Test
-    fun `a password-protected receiver is refused rather than silently mis-handled`() {
-        // Legacy SRP pairing is not wired in. Accepting the password and dropping
-        // it would fail later, at FairPlay, with a misleading message.
-        val failure = assertFailsWith<LegacyMirrorSessionFactory.Failure> {
-            LegacyMirrorSessionFactory.open(
+    fun `a password is accepted and passed to the mirroring endpoint`() {
+        // A password-protected AirPlay 1 receiver is handled by HTTP Digest on the
+        // mirroring endpoint (realm `AirPlay`), not by SRP pairing. The FairPlay
+        // handshake itself is unauthenticated, so a password must NOT stop the
+        // session before it starts -- it is carried to /stream.xml and /stream.
+        //
+        // The mock serves both endpoints without asking for credentials, so a
+        // password is simply unused here; what this asserts is that it is no
+        // longer refused outright. The Digest exchange itself is covered by
+        // LegacyDigestAuthTest.
+        withReceiver(MockLegacyReceiver.SessionPolicy.ACCEPT_FRESH_SESSION) { port, _ ->
+            val opened = LegacyMirrorSessionFactory.open(
                 host = "127.0.0.1",
-                rtspPort = 1, // never reached: the refusal happens first
+                rtspPort = port,
                 password = "hunter2",
+                streamPort = port,
+                responder = stubResponder,
             )
+            try {
+                assertEquals(1920, opened.display.width)
+            } finally {
+                opened.close()
+            }
         }
-        assertTrue(
-            failure.message!!.contains("password"),
-            "the message should name the password gap, was: ${failure.message}",
-        )
     }
 
     @Test
