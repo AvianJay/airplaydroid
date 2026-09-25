@@ -102,69 +102,72 @@ class FairPlayHardwareTest {
     }
 
     /**
-     * The control: the same receiver must not accept a deliberately wrong m3.
+     * The control: the same receiver must behave **differently** for a wrong m3.
      *
      * Without this, [a real receiver accepts the response we compute] would pass
      * even against a receiver that answers m4 to anything -- and the acceptance
      * would prove nothing. This is the test that makes the other one mean
      * something.
      *
-     * Three outcomes are distinguished, because conflating them is exactly how
-     * the Phase 2 gap stayed hidden:
+     * ### The control is *differential*, not absolute
      *
-     *  - **refused** (`Failure.Rejected` / `UnexpectedReply`) -- the receiver
-     *    evaluated the response and said no. This is the good control.
-     *  - **no reply at all** (a timeout) -- the receiver did not engage. It does
-     *    not establish that it validates anything, so the control is
-     *    *inconclusive*, and this test says so rather than claiming either way.
-     *  - **completed** -- the receiver accepted an all-zero response, which makes
-     *    the acceptance test meaningless. A real failure.
+     * LonelyScreen does not answer a wrong m3 with a refusal frame; it **closes
+     * the connection**. So "it refused" is false, but "it treats a wrong m3 the
+     * same as a right one" is also false: our correct m3 gets a valid m4 back,
+     * and a wrong one gets nothing. That difference is the evidence.
+     *
+     * This test therefore runs the real responder as well, and asserts the two
+     * outcomes **differ**. A receiver that closed on both, or answered both,
+     * would fail -- which is exactly the degenerate case worth excluding.
      */
     @Test
     @EnabledIfSystemProperty(named = "airplay.host", matches = ".+")
-    fun `the same receiver does not accept a corrupted response`() {
+    fun `the receiver treats a wrong m3 differently from a correct one`() {
         val endpoint = endpoint()
 
-        // An all-zero response: structurally valid, certainly wrong.
+        // Wrong: an all-zero response. Structurally valid, certainly incorrect.
         val bogus = FairPlayResponder { _, _ -> ByteArray(20) }
-
-        val outcome = runCatching {
+        val wrongOutcome = runCatching {
             SocketAirPlayConnection(endpoint).use { control ->
                 FairPlaySapSession(control, bogus, SecureRandom()).handshake()
             }
         }
 
-        val failure = outcome.exceptionOrNull()
-        when {
-            failure is FairPlaySapSession.Failure.Rejected -> {
-                println("control OK: the receiver refused an all-zero response " +
-                    "(status 0x${failure.status?.toString(16)})")
+        // Right: the real responder.
+        val rightOutcome = runCatching {
+            SocketAirPlayConnection(endpoint).use { control ->
+                FairPlaySapSession(control, FairPlayResponderImpl, SecureRandom()).handshake()
             }
-
-            failure is FairPlaySapSession.Failure.UnexpectedReply -> {
-                println("control OK: the receiver replied to an all-zero response with something " +
-                    "that is not a valid m4 (${failure.message})")
-            }
-
-            failure is java.net.SocketTimeoutException -> {
-                // Honest reporting: no reply means the control proves nothing.
-                println(
-                    "control INCONCLUSIVE: the receiver did not reply to a wrong m3 at all, " +
-                        "so it is not established that it validates the response. " +
-                        "The acceptance test therefore proves nothing on this receiver."
-                )
-            }
-
-            failure != null -> {
-                println("control INCONCLUSIVE: unexpected failure ${failure::class.simpleName}: ${failure.message}")
-            }
-
-            else -> throw AssertionError(
-                "the receiver ACCEPTED an all-zero response, so its acceptance in the other test " +
-                    "proves nothing -- it may not be checking the response at all",
-            )
         }
+
+        val wrongAccepted = wrongOutcome.isSuccess
+        val rightAccepted = rightOutcome.isSuccess
+
+        println("wrong m3 -> ${describe(wrongOutcome)}")
+        println("right m3 -> ${describe(rightOutcome)}")
+
+        // The receiver must not accept a wrong response.
+        assertTrue(
+            !wrongAccepted,
+            "the receiver ACCEPTED an all-zero response, so accepting ours proves nothing: " +
+                "it may not be checking the response at all",
+        )
+
+        // And it must not reject ours. Together these two facts are the result:
+        // the receiver distinguishes our response from a wrong one.
+        assertTrue(
+            rightAccepted,
+            "the receiver rejected our computed response too: ${describe(rightOutcome)}",
+        )
+
+        println("VERDICT: the receiver distinguishes our response from a wrong one")
     }
+
+    private fun describe(outcome: Result<FairPlaySapSession.Result>): String =
+        outcome.fold(
+            onSuccess = { "accepted (m4 received)" },
+            onFailure = { "${it::class.simpleName}: ${it.message}" },
+        )
 
     /**
      * Prints the receiver's raw m2, so a fresh challenge can be captured.

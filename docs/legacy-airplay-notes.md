@@ -208,10 +208,21 @@ Both are pinned by tests (`LegacyVideoStreamTest`).
 
 - `:protocol:test` - **266 tests, 0 failures** (3 skipped: the live-hardware tests).
 - `:app:assembleDebug` - builds; APK produced.
-- **Live hardware: a receiver accepts our m3.** 5/5 consecutive runs against
-  LonelyScreen. This is the decisive evidence: `FairPlaySapSession.handshake()`
-  returns only when the receiver answers our m3 with a valid m4 it validated
-  against that m3.
+- **Live hardware: a receiver accepts our m3, and distinguishes it from a wrong
+  one.** 5/5 consecutive runs against LonelyScreen. This is the decisive evidence:
+  `FairPlaySapSession.handshake()` returns only when the receiver answers our m3
+  with a valid m4 it validated against that m3.
+
+  The control is **differential**, because LonelyScreen does not send a refusal
+  frame - it closes the connection:
+
+  | m3 sent | outcome |
+  |---|---|
+  | correct response | **accepted** (valid m4) |
+  | all-zero response | `EOFException: connection closed` |
+
+  A receiver that answered m4 to anything, or closed on everything, would fail
+  that comparison. It is the evidence that the acceptance means something.
 - **Hardware-attested corpus: 12/12.** Challenge + real per-session local SAP to a
   response a receiver accepted. This exercises the session-aware path
   (`bridgeX9DataClosedForSAP`), which is the one a real sender uses.
@@ -229,6 +240,14 @@ Both are pinned by tests (`LegacyVideoStreamTest`).
 - The transport rule is pinned against **real** feature words observed on the
   network, and a test guards the fixtures themselves so a "fixed" feature word
   cannot make the routing test pass while the rule is wrong.
+
+### LonelyScreen cannot test the mirroring session
+
+LonelyScreen accepts the FairPlay handshake but exposes **only port 7000**: no
+7100, and `GET /stream.xml` there gets no reply. So it is a valid FairPlay target
+and *not* a valid legacy-mirroring target. Testing the session needs a receiver
+that actually serves the port-7100 endpoint - AirScreen or the AS-2112123AG
+dongle, when either is reachable.
 
 ### Two bugs hardware found that the test suite did not
 
