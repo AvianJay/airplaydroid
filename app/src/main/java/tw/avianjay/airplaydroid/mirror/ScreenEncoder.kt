@@ -10,12 +10,19 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Surface
 import tw.avianjay.airplaydroid.protocol.mirror.H264
-import tw.avianjay.airplaydroid.protocol.mirror.MirrorSession
+import tw.avianjay.airplaydroid.protocol.mirror.ReceiverDisplay
+import tw.avianjay.airplaydroid.protocol.mirror.VideoStreamSink
 import java.io.IOException
 import kotlin.concurrent.thread
 
 /**
- * Screen -> H.264 -> [MirrorSession].
+ * Screen -> H.264 -> [VideoStreamSink].
+ *
+ * The sink is the AirPlay 2 [tw.avianjay.airplaydroid.protocol.mirror.MirrorSession]
+ * or the legacy
+ * [tw.avianjay.airplaydroid.protocol.mirror.LegacyVideoStream]; the encoder is
+ * identical for both, because the two protocols differ only in how they frame and
+ * encrypt the same AVCC payload.
  *
  * A VirtualDisplay renders the screen straight into the encoder's input
  * surface, so no pixel ever passes through Java. The drain thread converts
@@ -32,7 +39,7 @@ import kotlin.concurrent.thread
  */
 class ScreenEncoder(
     private val projection: MediaProjection,
-    private val session: MirrorSession,
+    private val session: VideoStreamSink,
     val width: Int,
     val height: Int,
     private val densityDpi: Int,
@@ -189,7 +196,7 @@ class ScreenEncoder(
          * with the aspect kept, both sides a multiple of 16 so every hardware
          * encoder accepts them. 1280x720 when the receiver did not say.
          */
-        fun canvasFor(display: MirrorSession.Display?): Pair<Int, Int> {
+        fun canvasFor(display: ReceiverDisplay?): Pair<Int, Int> {
             val w = maxOf(display?.width ?: 1280, display?.height ?: 720)
             val h = minOf(display?.width ?: 1280, display?.height ?: 720)
             val scale = minOf(1.0, 1920.0 / w, 1080.0 / h)

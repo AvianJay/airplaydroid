@@ -10,22 +10,51 @@ Package id: `tw.avianjay.airplaydroid`
 
 | | |
 |---|---|
-| ✅ **Sender** | Android → Apple TV. HomePod / AirPlay speakers: not yet (no audio-only path). |
-| ❌ **Receiver** | This app does *not* make your phone an AirPlay target. |
-| ✅ **Screen mirroring** | Picture **and** sound, to an Apple TV on tvOS 26.6. **No FairPlay.** Verified on one unit. |
-| ⚠️ **Video-URL handoff** | `POST /play` with Digest. Accepted (200) by an AirPlay 2 Apple TV, but playback does not start there; not yet tested on an AirPlay 1 receiver. |
+| ??**Sender** | Android ??Apple TV. HomePod / AirPlay speakers: not yet (no audio-only path). |
+| ??**Receiver** | This app does *not* make your phone an AirPlay target. |
+| ??**Screen mirroring, AirPlay 2** | Picture **and** sound, to an Apple TV on tvOS 26.6. **No FairPlay** ??this path derives the video key from the pair-verify secret. Verified on one unit. |
+| ??**Screen mirroring, legacy (AirPlay 1)** | **Does not work.** The path is built and wired in, but FairPlay **Phase 2 is unimplemented**, so no receiver accepts our handshake. Tested against three real receivers; all refused. See [docs/fairplay-status.md](docs/fairplay-status.md). |
+| ?? **Video-URL handoff** | `POST /play` with Digest. Accepted (200) by an AirPlay 2 Apple TV, but playback does not start there; not yet tested on an AirPlay 1 receiver. |
 
-## Screen mirroring works, and needs no FairPlay
+## Screen mirroring: two protocols, not one
 
-An earlier version of this file said mirroring was blocked on the sender half of
-the FairPlay SAP handshake (`/fp-setup`). **That is wrong, at least for the Apple
-TV tested** (Apple TV 4K, AppleTV6,2, tvOS 26.6, password mode). Other models and
-tvOS versions are untested.
-On tvOS 26.6 the whole session rests on HomeKit pairing. The phone's screen and
-its audio play on an Apple TV 4K without `/fp-setup` ever being sent, and no
-FairPlay code exists anywhere in this project.
+**Which protocol a receiver wants is not decided by its model name.** It is
+decided by whether it advertises HAP pairing. Both paths exist in this project:
 
-Verified against that Apple TV ("Require Password" on) from an OPPO Reno6 5G
+| | AirPlay 2 (HAP) | Legacy (AirPlay 1) |
+|---|---|---|
+| Auth | HomeKit pair-setup / pair-verify | **FairPlay SAP** (`/fp-setup`) |
+| Video key | HKDF from the pair-verify secret | FairPlay `ekey` (72-byte `FPLY`) |
+| Video crypto | HAP frames | AES-CTR |
+| Endpoint | RTSP `SETUP`, stream type 110 | port 7100 `/stream.xml` + `POST /stream` |
+| Status | ??works, verified on one Apple TV | ??FairPlay response incomplete ??does not work |
+
+The AirPlay 2 path needs **no FairPlay at all** ??on tvOS 26.6 the whole session
+rests on HomeKit pairing, and the phone's screen and audio play on an Apple TV 4K
+without `/fp-setup` ever being sent.
+
+The legacy path **does** need FairPlay. Most of it is built ??the SAP framing, the
+m3 body cipher, the white-box Phase 1, the bridge, the 72-byte ekey wrap, the
+port-7100 `/stream` session, the 128-byte packet format and the continuous AES-CTR
+video keystream ??but the response core is **incomplete**: FairPlay's Phase 2
+(`exchangeFromX9`) is not implemented, so the m3 this project sends is rejected by
+every receiver. That was confirmed against three real receivers.
+
+This is documented in [docs/fairplay-status.md](docs/fairplay-status.md);
+the reasoning is in [docs/fairplay-research.md](docs/fairplay-research.md), and the
+implementation state in [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md).
+
+> Two earlier versions of this file were wrong in opposite directions. The first
+> said mirroring "needs no FairPlay" without qualification ??true only of the
+> AirPlay 2 path. The second said the legacy crypto was "done and verified
+> offline", which was true of two *components* (70/70 vectors) and false of the
+> whole chain. Hardware testing found the difference.
+
+> An earlier version of this file said mirroring "needs no FairPlay" without
+> qualification. That is true of the AirPlay 2 path only, and the heading was
+> misleading: mirroring to a dongle or an AppleTV3-class receiver does need it.
+
+Verified against an Apple TV 4K ("Require Password" on) from an OPPO Reno6 5G
 (CPH2251) on Android 13, and confirmed by eye and ear on the TV: the picture
 shows, rotation works, and the sound plays.
 
@@ -36,7 +65,7 @@ for its AirPlay password once, the first time.
 
 | Step | What happens |
 |---|---|
-| 1. pair-setup (first time only) | Persistent HomeKit pairing, M1–M6, with the AirPlay **password as the SRP PIN**. Both sides then hold each other's Ed25519 long-term key. |
+| 1. pair-setup (first time only) | Persistent HomeKit pairing, M1?6, with the AirPlay **password as the SRP PIN**. Both sides then hold each other's Ed25519 long-term key. |
 | 2. pair-verify | X25519 exchange, signed by both long-term keys. The shared secret keys the control, event and video channels. The audio key is a random `shk` sent inside the encrypted channel. |
 | 3. Encrypted control channel | The same socket switches to HAP framing: `[uint16-LE len][ChaCha20-Poly1305][tag]`, 1024-byte frames, length as AAD. |
 | 4. HTTP Digest | A password-protected receiver *also* demands Digest inside the encrypted channel: the control `SETUP` is answered `401` until it carries Digest. An encrypted `GET /info` was answered without it. Pairing does not replace Digest. Once challenged, the sender adds Digest to every later request. |
@@ -80,13 +109,13 @@ was two bugs at once:
    that pyatv pairs Apple TVs with pads only the inputs of `k` and `u`. Our own
    unit test shared the same mistake, so it passed.
 
-The earlier `/fp-setup → 403` probe was sent unauthenticated. It proved nothing
+The earlier `/fp-setup ??403` probe was sent unauthenticated. It proved nothing
 either way.
 
 ### Rotation
 
 The encoder canvas is a fixed landscape box: the receiver's display size from
-`updateInfo`, capped at 1920×1080 (default 1280×720). Android fits the mirrored
+`updateInfo`, capped at 1920?1080 (default 1280?720). Android fits the mirrored
 screen into it keeping its aspect ratio, so a portrait phone arrives pillarboxed and a
 landscape one fills the width. A 20:9 phone gets thin bars top and bottom. Rotating needs no encoder restart. This also
 matters because a MediaProjection may create only one VirtualDisplay.
@@ -107,7 +136,7 @@ matters because a MediaProjection may create only one VirtualDisplay.
   encrypted beyond what the OS provides. A newly typed password is saved only
   after the receiver accepts it. If the receiver later rejects the saved one, the
   app drops it but keeps the pairing, and the next tap asks again.
-- **Forget pairing** (in a device's ⋮ menu) deletes only this phone's copy. No
+- **Forget pairing** (in a device's ??menu) deletes only this phone's copy. No
   pair-remove is sent, so the Apple TV keeps this phone in its paired list.
 
 ### Diagnostics
@@ -125,7 +154,7 @@ against real hardware without a phone.
 
 ## Video-URL handoff (AirPlay 1)
 
-**Play video URL…** in a device's ⋮ menu drives `POST /play`, `POST /rate`,
+**Play video URL??* in a device's ??menu drives `POST /play`, `POST /rate`,
 `GET /playback-info` and `POST /stop`. The receiver fetches the URL itself; the
 phone never carries pixels. A receiver with `flags` bit 7 answers `401` with
 `WWW-Authenticate: Digest realm="airplay"`, and an ordinary RFC 2617 Digest
@@ -151,7 +180,7 @@ Confirmed SRP parameters, read off the wire: RFC 5054 **3072-bit** group,
 The pairing responses claim `Content-Type: application/x-apple-binary-plist`,
 but the body is **TLV8**.
 
-⚠️ Repeated failed pair-setup attempts trigger a HomeKit anti-brute-force
+?? Repeated failed pair-setup attempts trigger a HomeKit anti-brute-force
 **backoff** (TLV `Error=3`), and further attempts extend it. Test offline first:
 pair-setup M5/M6 and pair-verify were checked against a local srptools-based fake
 accessory before being pointed at the TV.
@@ -203,7 +232,7 @@ AGP 9 ships **built-in Kotlin**: `org.jetbrains.kotlin.android` must not be appl
 - **`:app`**: Compose UI, `NsdManager` discovery (only while the device list is on
   screen; there is no background discovery service), and the mirroring pipeline. The
   pipeline is `MirrorService`, a mediaProjection foreground service, which runs
-  `ScreenEncoder` (VirtualDisplay → MediaCodec) and `AudioCapture`
+  `ScreenEncoder` (VirtualDisplay ??MediaCodec) and `AudioCapture`
   (AudioPlaybackCapture). Pairings are kept in `PairingStore`.
 
 The split exists because the `features` bitmask is the easiest thing in the whole
@@ -212,26 +241,45 @@ first**, and reading it backwards silently misreads every capability.
 
 ## Roadmap
 
-- ✅ Discovery, HTTP Digest.
-- ⚠️ Video-URL handoff: `/play` is accepted but does not start playback on the
+- ??Discovery, HTTP Digest.
+- ?? Video-URL handoff: `/play` is accepted but does not start playback on the
   AirPlay 2 Apple TV; untested on AirPlay 1.
-- ✅ HomeKit pairing (persistent), pair-verify, encrypted control channel.
-- ✅ Screen mirroring with sound, and rotation, to a password-protected Apple TV
+- ??HomeKit pairing (persistent), pair-verify, encrypted control channel.
+- ??Screen mirroring with sound, and rotation, to a password-protected Apple TV
   (one unit tested).
-- ⬜ Mirroring to receivers that use an on-screen PIN (`flags` bit 9) or transient
+- ??**Legacy (AirPlay 1) mirroring** to dongles and third-party receivers.
+  **Blocked on FairPlay Phase 2**, which is unimplemented. Built and verified:
+  the SAP framing, the m3 body cipher, the white-box Phase 1, the SAP-hash/bridge
+  components (70/70 of upstream's vectors), the 72-byte ekey wrap, the port-7100
+  `/stream.xml` + `POST /stream` session, the 128-byte packet format and the
+  continuous AES-CTR video keystream. `MirrorService` routes a receiver without
+  HAP pairing to it and the picker badges it **Legacy**.
+  Tested against three real receivers (LonelyScreen, AirScreen, an AS-2112123AG
+  dongle); all three answered `/fp-setup` m1 but refused our m3, which is the
+  Phase 2 gap. The full-chain corpus is 0/142. See
+  [docs/fairplay-status.md](docs/fairplay-status.md).
+- 漎?Mirroring to receivers that use an on-screen PIN (`flags` bit 9) or transient
   pairing.
-- ⬜ `/play` inside the encrypted channel for AirPlay 2 receivers.
-- ⬜ RAOP / AirPlay 2 audio-only streaming to speakers. The realtime audio path
+- 漎?`/play` inside the encrypted channel for AirPlay 2 receivers.
+- 漎?RAOP / AirPlay 2 audio-only streaming to speakers. The realtime audio path
   already exists in `ScreenAudioStream`.
 
 ## Protocol references
 
-- [pyatv](https://github.com/postlund/pyatv) (MIT) — AirPlay 2 / RAOP sender, HAP pairing
-- [owntone](https://github.com/owntone/owntone-server) — AirPlay 2 output; the pairing-mode decision table
-- [doubletake](https://github.com/omarroth/doubletake) (GPL) — mirroring sender tested against Apple TVs; used as a protocol reference only, no code copied
-- [airplay2-receiver](https://github.com/openairplay/airplay2-receiver), [shairport-sync](https://github.com/mikebrady/shairport-sync), [UxPlay](https://github.com/FDH2/UxPlay) — receivers; what they parse is what a sender must send
-- [airplay-spec](https://github.com/openairplay/airplay-spec) — the unofficial protocol notes
+- [pyatv](https://github.com/postlund/pyatv) (MIT) ??AirPlay 2 / RAOP sender, HAP pairing
+- [owntone](https://github.com/owntone/owntone-server) ??AirPlay 2 output; the pairing-mode decision table
+- [doubletake](https://github.com/omarroth/doubletake) (LGPL-3.0-or-later) ??mirroring sender tested against
+  Apple TVs. **Code incorporated** for the legacy FairPlay path: its message round
+  keys are transcribed here, and it is the origin of the tables this project's
+  `fairplay/` package carries. See [NOTICE.md](NOTICE.md).
+- [objevovat/fairplay-sap-core](https://github.com/objevovat/fairplay-sap-core-airplay2-sender-authentication-handshake)
+  (LGPL-3.0-or-later) ??**code incorporated**: the FairPlay SAP hash, bridge and
+  white-box AES tables under `fairplay/` are a transcription of its Kotlin and Go
+  ports. See [NOTICE.md](NOTICE.md).
+- [airplay2-receiver](https://github.com/openairplay/airplay2-receiver), [shairport-sync](https://github.com/mikebrady/shairport-sync), [UxPlay](https://github.com/FDH2/UxPlay) ??receivers; what they parse is what a sender must send
+- [airplay-spec](https://github.com/openairplay/airplay-spec) ??the unofficial protocol notes
 
 ## Licence
 
-GPLv3. See [LICENSE](LICENSE).
+GPLv3. See [LICENSE](LICENSE). Third-party code and data incorporated into this
+project are recorded in [NOTICE.md](NOTICE.md).

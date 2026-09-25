@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
+import tw.avianjay.airplaydroid.protocol.MirrorTransport
 import tw.avianjay.airplaydroid.service.MirrorService
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -53,10 +54,20 @@ object MirrorController {
     /**
      * Why [device] cannot be mirrored to, or null if it can.
      *
-     * Only the path verified on hardware is offered: a receiver in password
-     * mode (`flags` bit 7), paired persistently with that password. A receiver
-     * that wants an on-screen PIN (bit 9), or one with no access control at all
-     * (transient pairing), needs a pairing flow that has not been built yet.
+     * Two protocols reach this point, and which one applies is decided by whether
+     * the receiver advertises HAP pairing -- not by its model name:
+     *
+     *  - **HAP** receivers use the AirPlay 2 path ([MirrorSession]).
+     *  - **Everything else that advertises screen mirroring** uses the legacy
+     *    path ([LegacyMirrorSessionFactory]): FairPlay SAP, then port-7100
+     *    `/stream`.
+     *
+     * A legacy receiver is therefore no longer refused. It used to be, with a
+     * message saying this app could not mirror to it.
+     *
+     * A receiver that wants an on-screen PIN (bit 9), or one with no access
+     * control at all (transient pairing), still needs a pairing flow that has not
+     * been built for the HAP path; the legacy path has the same gap.
      */
     fun refusalFor(device: AirPlayDevice, hasSavedPairing: Boolean): String? {
         val txt = device.airPlayTxt ?: return when {
@@ -69,17 +80,21 @@ object MirrorController {
         if (!txt.features.supportsScreenMirroring) return "${device.displayName} does not accept screen mirroring."
         if (txt.pairingBlocked) return "${device.displayName} only allows devices from its own Home."
         if (device.videoEndpoint == null) return "No address for ${device.displayName} yet."
-        if (!txt.features.supportsHapPairing) {
-            // Probed on hardware: such a receiver answers /info but closes the
-            // connection on a mirroring SETUP that carries no FairPlay key.
-            return "${device.displayName} uses the older AirPlay mirroring, which needs Apple's FairPlay. " +
-                "iPhones, iPads and Macs can mirror to it; this app cannot."
-        }
+        // No HAP pairing means the legacy protocol, which this app now speaks.
+        // Nothing to refuse here: `usesLegacyPath` picks the transport.
         if (hasSavedPairing) return null
         // Password receivers pair with the password, PIN receivers (bits 3, 9) with
         // a code shown on screen, and the rest transiently.
         return null
     }
+
+    /**
+     * Whether [device] needs the legacy (AirPlay 1) transport.
+     *
+     * Delegates to [MirrorTransport] so the picker's badge, this decision and the
+     * service's choice of session cannot disagree.
+     */
+    fun usesLegacyPath(device: AirPlayDevice): Boolean = MirrorTransport.isLegacy(device)
 
     /**
      * What a tap on [device] should do, given its saved pairing and the session

@@ -78,7 +78,7 @@ class MirrorSession private constructor(
     /** Why screen audio is not running, if it was asked for and is not. */
     val audioFailure: String?,
     private val listener: Listener,
-) : Closeable {
+) : VideoStreamSink, Closeable {
 
     /** Called from the session's own threads. */
     fun interface Listener {
@@ -174,7 +174,7 @@ class MirrorSession private constructor(
      * the next keyframe, stamped with that keyframe's timestamp -- receivers pair
      * the two by timestamp. Set it again whenever the SPS/PPS change.
      */
-    fun setCodecConfig(avcC: ByteArray, width: Int, height: Int) {
+    override fun setCodecConfig(avcC: ByteArray, width: Int, height: Int) {
         val header = ByteArray(HEADER_SIZE)
         val le = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
         le.putInt(0, avcC.size)
@@ -194,7 +194,7 @@ class MirrorSession private constructor(
      * captured at local monotonic time [captureNanos] (for a MediaCodec surface
      * encoder: `presentationTimeUs * 1000`).
      */
-    fun sendFrame(avcc: ByteArray, keyframe: Boolean, captureNanos: Long = System.nanoTime()) {
+    override fun sendFrame(avcc: ByteArray, keyframe: Boolean, captureNanos: Long) {
         val header = ByteArray(HEADER_SIZE)
         val le = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
         le.putInt(0, avcc.size + TAG_SIZE)

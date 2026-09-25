@@ -31,4 +31,15 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+
+    // Forward the hardware-test properties to the test JVM. Gradle's `-D` sets
+    // them on the *Gradle* JVM, which the tests cannot see, so a plain
+    // `-Dairplay.host=...` would silently leave FairPlayHardwareTest disabled
+    // rather than failing -- the worst kind of no-op.
+    //
+    // Only forwarded when actually set, so the default run stays offline and
+    // hardware-free.
+    listOf("airplay.host", "airplay.port", "airplay.capture").forEach { name ->
+        System.getProperty(name)?.let { systemProperty(name, it) }
+    }
 }

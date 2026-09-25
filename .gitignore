@@ -23,3 +23,9 @@ output.json
 
 # Kotlin 2.x build session scratch
 .kotlin/
+
+# Scratch: third-party sources downloaded for protocol research, and local
+# hardware-probe output. Reference material only -- not ours to redistribute,
+# so it must never be committed.
+_research/
+.probe/

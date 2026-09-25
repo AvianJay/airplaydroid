@@ -49,6 +49,40 @@ class SocketAirPlayConnection private constructor(
      */
     private var poisoned = false
 
+    /**
+     * Writes bytes with no HTTP framing.
+     *
+     * Needed by the legacy mirroring path: after `POST /stream` the same socket
+     * stops being an HTTP connection and carries the raw packetised video
+     * stream. Flushes, because these writes are the media itself and buffering
+     * them would add latency to every frame.
+     */
+    @Synchronized
+    fun writeRaw(bytes: ByteArray) {
+        if (poisoned) throw IOException("connection is no longer usable after an earlier failure")
+        try {
+            output.write(bytes)
+            output.flush()
+        } catch (t: Throwable) {
+            poisoned = true
+            close()
+            throw t
+        }
+    }
+
+    /** Writes a request without reading a reply. Used to open the legacy stream. */
+    @Synchronized
+    fun write(request: AirPlayRequest) {
+        if (poisoned) throw IOException("connection is no longer usable after an earlier failure")
+        try {
+            AirPlayHttp.write(output, request)
+        } catch (t: Throwable) {
+            poisoned = true
+            close()
+            throw t
+        }
+    }
+
     @Synchronized
     override fun exchange(request: AirPlayRequest): AirPlayResponse {
         if (poisoned) throw IOException("connection is no longer usable after an earlier failure")

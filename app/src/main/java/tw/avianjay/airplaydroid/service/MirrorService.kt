@@ -26,7 +26,9 @@ import tw.avianjay.airplaydroid.mirror.MirrorLog
 import tw.avianjay.airplaydroid.mirror.MirrorUiState.Phase
 import tw.avianjay.airplaydroid.mirror.PairingStore
 import tw.avianjay.airplaydroid.mirror.ScreenEncoder
+import tw.avianjay.airplaydroid.protocol.mirror.LegacyMirrorSessionFactory
 import tw.avianjay.airplaydroid.protocol.mirror.MirrorSession
+import tw.avianjay.airplaydroid.protocol.mirror.ReceiverDisplay
 import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
 import java.util.concurrent.Executors
 
@@ -59,6 +61,14 @@ class MirrorService : Service() {
     private var session: MirrorSession? = null
     private var encoder: ScreenEncoder? = null
     private var audio: AudioCapture? = null
+
+    /**
+     * The legacy (AirPlay 1) session, when that is the transport in use.
+     *
+     * Separate from [session] because the two are different protocols with
+     * different types; at most one is ever non-null.
+     */
+    private var legacy: LegacyMirrorSessionFactory.Opened? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -123,6 +133,14 @@ class MirrorService : Service() {
     private fun connect(device: tw.avianjay.airplaydroid.protocol.AirPlayDevice, typedPassword: String?, mp: MediaProjection) {
         val endpoint = device.videoEndpoint
             ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
+
+        // A receiver that does not advertise HAP pairing speaks the legacy
+        // protocol: FairPlay SAP, then port-7100 /stream. Its own path, because
+        // none of the pairing machinery below applies to it.
+        if (MirrorController.usesLegacyPath(device)) {
+            return connectLegacy(device, typedPassword, mp)
+        }
+
         val store = PairingStore(this)
         // Transient pairing only when nothing points at a password: the receiver
         // does not ask for one or a PIN (the same rule the picker asks by), none
@@ -223,6 +241,70 @@ class MirrorService : Service() {
     }
 
     /**
+     * A receiver that does not advertise HAP pairing: the legacy AirPlay 1 path.
+     *
+     * FairPlay SAP on the RTSP port, then `/stream.xml` and `POST /stream` on the
+     * mirroring port. No HomeKit pairing, no Digest, and no key derived from a
+     * pair-verify secret -- the stream key is wrapped by FairPlay instead.
+     *
+     * The legacy path has no audio yet: the AirPlay 1 mirroring audio channel is
+     * the RAOP RTP path, which this app does not implement, so any captured audio
+     * is stopped rather than silently dropped.
+     */
+    private fun connectLegacy(
+        device: tw.avianjay.airplaydroid.protocol.AirPlayDevice,
+        typedPassword: String?,
+        mp: MediaProjection,
+    ) {
+        val endpoint = device.videoEndpoint
+            ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
+        try {
+            MirrorController.setPhase(Phase.Connecting)
+            val opened = LegacyMirrorSessionFactory.open(
+                host = endpoint.host,
+                rtspPort = endpoint.port,
+                password = typedPassword,
+            )
+
+            val adopted = synchronized(lock) { if (stopping) false else { legacy = opened; true } }
+            if (!adopted) {
+                opened.close()
+                return
+            }
+
+            // Legacy mirroring audio is the RAOP RTP path, which is not built:
+            // stop the capture rather than let it run for nothing.
+            synchronized(lock) { audio }?.let { capture ->
+                synchronized(lock) { audio = null }
+                capture.stop()
+            }
+
+            val (width, height) = ScreenEncoder.canvasFor(opened.display)
+            val started = ScreenEncoder(mp, opened.video, width, height, resources.displayMetrics.densityDpi) { reason ->
+                finish(reason, why = "legacy encoder: $reason")
+            }
+            started.start()
+            val kept = synchronized(lock) { if (stopping) false else { encoder = started; true } }
+            if (!kept) {
+                started.stop()
+                return
+            }
+
+            MirrorLog.write(
+                "legacy mirroring as ${width}x$height (receiver display ${opened.display.width}x${opened.display.height}) " +
+                    "to ${device.displayName}, fairplay=ok"
+            )
+            MirrorController.setPhase(Phase.Mirroring)
+        } catch (e: LegacyMirrorSessionFactory.Failure) {
+            Log.w(TAG, "legacy mirroring failed", e)
+            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "legacy: ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "legacy mirroring failed", e)
+            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "legacy setup: $e")
+        }
+    }
+
+    /**
      * The half of a session shared by both pairing paths: adopt [opened] unless
      * finish() already ran, start the encoder, hand audio over.
      */
@@ -237,7 +319,9 @@ class MirrorService : Service() {
             return
         }
 
-        val (width, height) = ScreenEncoder.canvasFor(opened.receiverDisplay)
+        val (width, height) = ScreenEncoder.canvasFor(
+            opened.receiverDisplay?.let { ReceiverDisplay(it.width, it.height) },
+        )
         val dpi = resources.displayMetrics.densityDpi
         val started = ScreenEncoder(mp, opened, width, height, dpi) { reason ->
             finish(reason, why = "encoder: $reason")
@@ -378,12 +462,13 @@ class MirrorService : Service() {
         val e: ScreenEncoder?
         val a: AudioCapture?
         val s: MirrorSession?
+        val l: LegacyMirrorSessionFactory.Opened?
         val p: MediaProjection?
         synchronized(lock) {
             if (stopping) return
             stopping = true
-            e = encoder; a = audio; s = session; p = projection
-            encoder = null; audio = null; session = null; projection = null
+            e = encoder; a = audio; s = session; l = legacy; p = projection
+            encoder = null; audio = null; session = null; legacy = null; projection = null
         }
         MirrorLog.write("end: $why")
         // Network teardown must not run on the main thread.
@@ -391,6 +476,7 @@ class MirrorService : Service() {
             runCatching { e?.stop() }
             runCatching { a?.stop() }
             runCatching { s?.close() }
+            runCatching { l?.close() }
         }, "mirror-teardown").start()
         main.post {
             runCatching { p?.stop() }

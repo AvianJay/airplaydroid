@@ -13,6 +13,8 @@ enum class DeviceCapability(val label: String) {
     Audio("Audio"),
     Video("Video"),
     AirPlay2("AirPlay 2"),
+    /** Speaks the AirPlay 1 mirroring protocol: FairPlay SAP, then port-7100 /stream. */
+    Legacy("Legacy"),
     NeedsPin("Needs PIN"),
     NeedsPassword("Needs password"),
     PairingBlocked("Pairing blocked"),
@@ -33,6 +35,11 @@ object Capabilities {
         if (airPlay?.features?.supportsVideoUrl == true) result += DeviceCapability.Video
 
         if (airPlay?.features?.isAirPlay2 == true) result += DeviceCapability.AirPlay2
+
+        // Advertises mirroring but not HAP pairing: the legacy protocol. The
+        // badge exists so the user can see which transport a tap will use, and it
+        // reads the same [MirrorTransport] the service branches on.
+        if (MirrorTransport.isLegacy(airPlay)) result += DeviceCapability.Legacy
 
         if (airPlay?.pairingBlocked == true) result += DeviceCapability.PairingBlocked
 

@@ -44,6 +44,15 @@ sealed interface PlistValue {
             is PInt -> v.value.toDouble()
             else -> null
         }
+
+        /**
+         * An integer, when the value really is one.
+         *
+         * Distinct from [number]: a display width is a count, and silently
+         * accepting `720.5` for it would hide a malformed reply. Returns null for
+         * a real rather than truncating.
+         */
+        fun int(key: String): Int? = (entries[key] as? PInt)?.value?.toInt()
     }
 
     companion object {
