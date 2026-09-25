@@ -75,6 +75,7 @@ import tw.avianjay.airplaydroid.mirror.MirrorUiState
 import tw.avianjay.airplaydroid.mirror.PairingStore
 import tw.avianjay.airplaydroid.playback.PlaybackUiState
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
+import tw.avianjay.airplaydroid.protocol.mirror.LegacyRtspMirrorSession.KeySeed
 import tw.avianjay.airplaydroid.protocol.DeviceCapability
 import tw.avianjay.airplaydroid.protocol.VideoHandoff
 import kotlin.math.roundToInt
@@ -100,9 +101,13 @@ fun DevicePickerScreen(
     onSubmitPin: (String) -> Unit,
     onCancelPin: () -> Unit,
     onRefused: (String) -> Unit,
+    onAddByAddress: (host: String, port: Int) -> Unit,
+    legacyKeySeeds: Map<String, KeySeed>,
+    onCycleLegacyKey: (AirPlayDevice) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var passwordFor by remember { mutableStateOf<AirPlayDevice?>(null) }
+    var addingAddress by rememberSaveable { mutableStateOf(false) }
     var playUrlFor by remember { mutableStateOf<AirPlayDevice?>(null) }
     var forgetFor by remember { mutableStateOf<AirPlayDevice?>(null) }
     // Resolved here because the row's click lambda cannot call stringResource.
@@ -110,7 +115,16 @@ fun DevicePickerScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.picker_title)) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.picker_title)) },
+                actions = {
+                    TextButton(onClick = { addingAddress = true }) {
+                        Text(stringResource(R.string.action_add_by_address))
+                    }
+                },
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             Column(
@@ -163,6 +177,9 @@ fun DevicePickerScreen(
                                 },
                                 onPlayUrl = { playUrlFor = device },
                                 onForget = { forgetFor = device },
+                                legacyKeySeed = legacyKeySeeds[device.key]
+                                    ?: KeySeed.AUTO.takeIf { MirrorController.usesLegacyPath(device) },
+                                onCycleLegacyKey = { onCycleLegacyKey(device) },
                             )
                             // Inset to the text column, past the leading icon.
                             HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
@@ -208,6 +225,16 @@ fun DevicePickerScreen(
             onConfirm = { url, password ->
                 playUrlFor = null
                 onPlay(device, url, password)
+            },
+        )
+    }
+
+    if (addingAddress) {
+        AddAddressDialog(
+            onDismiss = { addingAddress = false },
+            onConfirm = { host, port ->
+                addingAddress = false
+                onAddByAddress(host, port)
             },
         )
     }
@@ -261,6 +288,8 @@ private fun DeviceRow(
     onClick: () -> Unit,
     onPlayUrl: () -> Unit,
     onForget: () -> Unit,
+    legacyKeySeed: KeySeed? = null,
+    onCycleLegacyKey: () -> Unit = {},
 ) {
     val features = device.airPlayTxt?.features
     val icon = when {
@@ -324,6 +353,8 @@ private fun DeviceRow(
                 forgetEnabled = !mirroringHere,
                 onPlayUrl = onPlayUrl,
                 onForget = onForget,
+                legacyKeySeed = legacyKeySeed,
+                onCycleLegacyKey = onCycleLegacyKey,
             )
         },
     )
@@ -337,6 +368,8 @@ private fun DeviceMenu(
     forgetEnabled: Boolean,
     onPlayUrl: () -> Unit,
     onForget: () -> Unit,
+    legacyKeySeed: KeySeed?,
+    onCycleLegacyKey: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -355,6 +388,27 @@ private fun DeviceMenu(
                     onPlayUrl()
                 },
             )
+            // Legacy receivers only. Tapping cycles the choice and keeps the menu
+            // open, so the new label is visible; it applies from the next session.
+            legacyKeySeed?.let { seed ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                stringResource(
+                                    when (seed) {
+                                        KeySeed.AUTO -> R.string.legacy_key_auto
+                                        KeySeed.RAW -> R.string.legacy_key_raw
+                                        KeySeed.MIXED -> R.string.legacy_key_mixed
+                                    }
+                                )
+                            )
+                            Text(stringResource(R.string.legacy_key_hint), style = MaterialTheme.typography.bodySmall)
+                        }
+                    },
+                    onClick = onCycleLegacyKey,
+                )
+            }
             if (paired) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.action_forget_pairing)) },
@@ -400,6 +454,60 @@ private fun PinDialog(
         confirmButton = {
             TextButton(onClick = { onConfirm(pin) }, enabled = pin.length >= 4) {
                 Text(stringResource(R.string.action_pair))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * A receiver discovery cannot see: across a VPN or tunnel, or the host seen from
+ * an Android emulator, where multicast does not pass. The port is the
+ * `_airplay._tcp` one, 7000 on nearly every receiver.
+ */
+@Composable
+private fun AddAddressDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (host: String, port: Int) -> Unit,
+) {
+    var host by rememberSaveable { mutableStateOf("") }
+    var port by rememberSaveable { mutableStateOf("7000") }
+    val portNumber = port.toIntOrNull()?.takeIf { it in 1..65535 }
+    val valid = host.isNotBlank() && portNumber != null
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.add_address_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.add_address_body),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = { host = it.trim() },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.add_address_host_label)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { port = it.filter(Char::isDigit).take(5) },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.add_address_port_label)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (valid) onConfirm(host, portNumber!!) }),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(host, portNumber!!) }, enabled = valid) {
+                Text(stringResource(R.string.action_add))
             }
         },
         dismissButton = {

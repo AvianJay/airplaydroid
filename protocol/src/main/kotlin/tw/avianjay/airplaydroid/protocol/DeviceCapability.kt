@@ -13,7 +13,7 @@ enum class DeviceCapability(val label: String) {
     Audio("Audio"),
     Video("Video"),
     AirPlay2("AirPlay 2"),
-    /** Speaks the AirPlay 1 mirroring protocol: FairPlay SAP, then port-7100 /stream. */
+    /** Speaks the AirPlay 1 mirroring protocol: FairPlay SAP, then RTSP type 110 (or port-7100 /stream). */
     Legacy("Legacy"),
     NeedsPin("Needs PIN"),
     NeedsPassword("Needs password"),

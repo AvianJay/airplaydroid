@@ -105,6 +105,18 @@ class LegacyVideoStream(
     private val output: OutputStream,
     private val cipher: LegacyMirrorCipher?,
     private val ntp: NtpClock = NtpClock(),
+    /**
+     * Whether packet timestamps count seconds from 1970 rather than 1900.
+     *
+     * The RTSP type-110 path wants 1970. RPiPlay and UxPlay read the header stamp
+     * with `raop_ntp_timestamp_to_micro_seconds(ts, false)` -- no epoch shift --
+     * while the timing replies they compare it against are shifted. A 1900 stamp
+     * there reads as 70 years in the future, and a receiver that paces by
+     * timestamp would hold every frame. The port-7100 path keeps NTP-era stamps.
+     */
+    private val unixEpochTimestamps: Boolean = false,
+    /** Which generation of the 128-byte header to write; see [LegacyStreamPackets.HeaderStyle]. */
+    private val headerStyle: LegacyStreamPackets.HeaderStyle = LegacyStreamPackets.HeaderStyle.NTO,
 ) : VideoStreamSink, Closeable {
 
     /**
@@ -118,13 +130,18 @@ class LegacyVideoStream(
         stream: LegacyMirrorSession.OpenStream,
         cipher: LegacyMirrorCipher?,
         ntp: NtpClock = NtpClock(),
-    ) : this(stream.outputStream(), cipher, ntp)
+    ) : this(stream.outputStream(), cipher, ntp, unixEpochTimestamps = false)
 
     /** Local-time-to-receiver-clock offset in milliseconds; 0 until measured. */
     @Volatile
     var clockOffsetMillis: Long = 0L
 
     private var codecConfigSent: ByteArray? = null
+    private var codecWidth = 0
+    private var codecHeight = 0
+
+    /** Whether a codec packet has gone out since the last keyframe. */
+    private var codecSinceKeyframe = false
 
     /**
      * Sends the `avcC` record.
@@ -136,8 +153,17 @@ class LegacyVideoStream(
     @Synchronized
     override fun setCodecConfig(avcC: ByteArray, width: Int, height: Int) {
         if (avcC.contentEquals(codecConfigSent)) return
-        write(LegacyStreamPackets.TYPE_CODEC_DATA, avcC, encrypt = false, captureNanos = System.nanoTime())
         codecConfigSent = avcC
+        codecWidth = width
+        codecHeight = height
+        writeCodecConfig()
+    }
+
+    private fun writeCodecConfig() {
+        val avcC = codecConfigSent ?: return
+        output.write(LegacyStreamPackets.codecData(ntpTimestamp(System.nanoTime()), avcC, codecWidth, codecHeight, headerStyle))
+        output.flush()
+        codecSinceKeyframe = true
     }
 
     /**
@@ -145,12 +171,18 @@ class LegacyVideoStream(
      *
      * [captureNanos] is on the phone's monotonic clock; it becomes wall-clock
      * milliseconds, shifted by [clockOffsetMillis], and is packed as NTP.
-     * [keyframe] is unused: the legacy packet format has no flag for it, and a
-     * receiver detects an IDR NAL by its type.
+     * [keyframe] sets byte 5 in the iOS 9 header; the nto header has no flag
+     * for it, and a receiver detects an IDR NAL by its type.
      */
     @Synchronized
     override fun sendFrame(avcc: ByteArray, keyframe: Boolean, captureNanos: Long) {
-        write(LegacyStreamPackets.TYPE_VIDEO, avcc, encrypt = cipher != null, captureNanos = captureNanos)
+        // Every keyframe is preceded by the codec packet. A receiver whose
+        // decoder attaches after the stream started -- iPhoneMirror opens its
+        // pipeline seconds in, once its UI has picked the source -- otherwise
+        // never sees SPS/PPS and decodes nothing, however many IDRs follow.
+        if (keyframe && !codecSinceKeyframe) writeCodecConfig()
+        write(LegacyStreamPackets.TYPE_VIDEO, avcc, encrypt = cipher != null, captureNanos = captureNanos, keyframe = keyframe)
+        if (keyframe) codecSinceKeyframe = false
     }
 
     /** Sends a heartbeat. Receivers use these to notice a stalled sender. */
@@ -159,10 +191,10 @@ class LegacyVideoStream(
         write(LegacyStreamPackets.TYPE_HEARTBEAT, ByteArray(0), encrypt = false, captureNanos = captureNanos)
     }
 
-    private fun write(type: Int, payload: ByteArray, encrypt: Boolean, captureNanos: Long) {
+    private fun write(type: Int, payload: ByteArray, encrypt: Boolean, captureNanos: Long, keyframe: Boolean = false) {
         // The header is built first and left in the clear: it carries the payload
         // size and the NTP stamp, which the receiver needs before it can decrypt.
-        val packet = LegacyStreamPackets.packet(type, ntpTimestamp(captureNanos), payload)
+        val packet = LegacyStreamPackets.packet(type, ntpTimestamp(captureNanos), payload, headerStyle, keyframe)
         val out = if (encrypt && payload.isNotEmpty()) {
             cipher!!.apply(payload).copyInto(packet, LegacyStreamPackets.HEADER_BYTES)
             packet
@@ -177,10 +209,15 @@ class LegacyVideoStream(
         val epochMillis = System.currentTimeMillis() +
             (captureNanos - System.nanoTime()) / 1_000_000L +
             clockOffsetMillis
-        return ntp.toNtp(epochMillis)
+        val stamp = ntp.toNtp(epochMillis)
+        return if (unixEpochTimestamps) stamp - (NTP_UNIX_OFFSET_SECONDS shl 32) else stamp
     }
 
     override fun close() {
         runCatching { output.close() }
+    }
+
+    private companion object {
+        const val NTP_UNIX_OFFSET_SECONDS = 2_208_988_800L
     }
 }

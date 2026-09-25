@@ -148,4 +148,60 @@ class LegacyStreamPacketsTest {
             )
         }
     }
+
+    // --- the iOS 9 header, used on the RTSP type-110 data channel ---
+
+    @Test
+    fun `the iOS 9 codec packet is marked 16 01 and carries the picture size`() {
+        val packet = LegacyStreamPackets.codecData(
+            0, hex("0164c028ffe10010"), 1280, 720, LegacyStreamPackets.HeaderStyle.IOS9,
+        )
+        assertEquals(1, packet[4].toInt(), "type is byte 4")
+        assertEquals(0x16, packet[6].toInt(), "UxPlay reads byte 6 to tell H.264 (0x16) from HEVC")
+        assertEquals(0x01, packet[7].toInt())
+        for (offset in intArrayOf(16, 40, 56)) {
+            val header = ByteBuffer.wrap(packet, 0, 128).order(ByteOrder.LITTLE_ENDIAN)
+            assertEquals(1280f, header.getFloat(offset), "width at $offset")
+            assertEquals(720f, header.getFloat(offset + 4), "height at $offset")
+        }
+    }
+
+    @Test
+    fun `the iOS 9 video packet flags a keyframe in byte 5 and nothing else`() {
+        val key = LegacyStreamPackets.packet(
+            LegacyStreamPackets.TYPE_VIDEO, 0, ByteArray(4), LegacyStreamPackets.HeaderStyle.IOS9, keyframe = true,
+        )
+        val delta = LegacyStreamPackets.packet(
+            LegacyStreamPackets.TYPE_VIDEO, 0, ByteArray(4), LegacyStreamPackets.HeaderStyle.IOS9, keyframe = false,
+        )
+        assertEquals(0x10, key[5].toInt())
+        assertEquals(0, delta[5].toInt())
+        assertEquals(0, littleEndianShort(key, 6).toInt(), "video carries no marker in the iOS 9 header")
+    }
+
+    @Test
+    fun `the nto header never sets the keyframe flag`() {
+        val packet = LegacyStreamPackets.packet(LegacyStreamPackets.TYPE_VIDEO, 0, ByteArray(4), keyframe = true)
+        assertEquals(0, packet[5].toInt(), "byte 5 is the high half of the 16-bit type in the nto header")
+    }
+
+    @Test
+    fun `the decoder reads both header styles`() {
+        for (style in LegacyStreamPackets.HeaderStyle.entries) {
+            val video = LegacyStreamPackets.packet(LegacyStreamPackets.TYPE_VIDEO, 7, ByteArray(3), style, keyframe = true)
+            assertEquals(LegacyStreamPackets.TYPE_VIDEO, LegacyStreamPackets.decode(video)!!.type, "$style video")
+            val beat = LegacyStreamPackets.packet(LegacyStreamPackets.TYPE_HEARTBEAT, 7, style = style)
+            assertEquals(LegacyStreamPackets.TYPE_HEARTBEAT, LegacyStreamPackets.decode(beat)!!.type, "$style heartbeat")
+            val codec = LegacyStreamPackets.codecData(7, ByteArray(2), 1, 1, style)
+            assertEquals(LegacyStreamPackets.TYPE_CODEC_DATA, LegacyStreamPackets.decode(codec)!!.type, "$style codec")
+        }
+    }
+
+    @Test
+    fun `the decoder still rejects a codec marker on a video packet`() {
+        val packet = LegacyStreamPackets.packet(LegacyStreamPackets.TYPE_VIDEO, 0, ByteArray(8), LegacyStreamPackets.HeaderStyle.IOS9)
+        packet[6] = 0x16
+        packet[7] = 0x01
+        assertFailsWith<IllegalArgumentException> { LegacyStreamPackets.decode(packet) }
+    }
 }

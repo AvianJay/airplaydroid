@@ -2,14 +2,24 @@ package tw.avianjay.airplaydroid.protocol.devtools
 
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayMessageCipher
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayRecords
+import tw.avianjay.airplaydroid.protocol.pairing.HapCrypto
+import tw.avianjay.airplaydroid.protocol.plist.BinaryPlist
+import tw.avianjay.airplaydroid.protocol.plist.PlistValue
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
 /**
@@ -27,6 +37,11 @@ import kotlin.concurrent.thread
  *   error frame `1e 1e 1e 1e 03 01 04 9c 00 00 00 00` and no m4.
  * - `OPTIONS` returns the receiver's `Public` method list.
  * - Any other path returns the receiver's `404`.
+ *
+ * With an [RtspRecord] it also serves the **RTSP type-110** mirroring path the
+ * way RPiPlay does -- `/pair-setup`, `/pair-verify`, both SETUPs, a `dataPort`,
+ * RECORD and `/feedback` -- and records what the sender sent. Without one, those
+ * requests get the 404 above, which is how a port-7100-only receiver looks.
  *
  * ### Why this exists
  *
@@ -115,16 +130,28 @@ object MockLegacyReceiver {
     /**
      * Runs the mock standalone.
      *
-     *   MockLegacyReceiver [port] [--accept-fresh] [--fixtures <dir>]
+     *   MockLegacyReceiver [port] [--accept-fresh | --accept-body] [--rtsp <dump-dir>] [--fixtures <dir>]
      *
      * `--fixtures` defaults to `protocol/src/test/resources/fairplay` relative to
      * the working directory, which is where the captures live in a checkout.
+     *
+     * `--rtsp` also serves the RTSP type-110 path and, when each session ends,
+     * writes its m3, `ekey`, `eiv`, stream connection id and data channel to
+     * `<dump-dir>/session-N/`. Because the m2 is the static capture, the key can
+     * then be unwrapped offline with a `playfair_decrypt` implementation and the
+     * sender's real frames decrypted -- which is how a stream that crashes a
+     * receiver gets examined.
      */
     @JvmStatic
     fun main(args: Array<String>) {
         val port = args.firstOrNull { it.toIntOrNull() != null }?.toInt() ?: DEFAULT_PORT
-        val policy = if (args.contains("--accept-fresh")) SessionPolicy.ACCEPT_FRESH_SESSION
-        else SessionPolicy.REJECT_ALL
+        val policy = when {
+            args.contains("--accept-fresh") -> SessionPolicy.ACCEPT_FRESH_SESSION
+            args.contains("--accept-body") -> SessionPolicy.ACCEPT_DECRYPTABLE_BODY
+            else -> SessionPolicy.REJECT_ALL
+        }
+        val dumpDir = args.indexOf("--rtsp").takeIf { it >= 0 }?.let { java.io.File(args[it + 1]) }
+        val sessions = java.util.concurrent.atomic.AtomicInteger()
 
         val dirArg = args.indexOf("--fixtures").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) }
         fixturesDir = java.io.File(
@@ -136,7 +163,7 @@ object MockLegacyReceiver {
             }
         }
 
-        val server = ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"))
+        val server = ServerSocket(port, 8, InetAddress.getByName(if (dumpDir != null) "0.0.0.0" else "127.0.0.1"))
         println("mock legacy AirPlay 1 receiver ($MODEL / $SERVER_HEADER) on 127.0.0.1:$port")
         println("fixtures: ${fixturesDir!!.absolutePath}")
         println(
@@ -160,7 +187,23 @@ object MockLegacyReceiver {
             } catch (e: Exception) {
                 break
             }
-            thread(isDaemon = true) { serve(socket, policy, seen, StreamRecorder()) }
+            if (dumpDir == null) {
+                thread(isDaemon = true) { serve(socket, policy, seen, StreamRecorder()) }
+                continue
+            }
+            thread(isDaemon = true) {
+                val record = RtspRecord()
+                serve(socket, policy, seen, StreamRecorder(), record)
+                if (record.ekey == null) return@thread
+                val dir = java.io.File(dumpDir, "session-${sessions.incrementAndGet()}").apply { mkdirs() }
+                record.m3?.let { java.io.File(dir, "m3.bin").writeBytes(it) }
+                java.io.File(dir, "ekey.bin").writeBytes(record.ekey!!)
+                java.io.File(dir, "eiv.bin").writeBytes(record.eiv!!)
+                java.io.File(dir, "stream.bin").writeBytes(record.video.awaitClosed(10_000))
+                java.io.File(dir, "stream-connection-id.txt")
+                    .writeText(java.lang.Long.toUnsignedString(record.streamConnectionId ?: 0L))
+                println("session dumped to ${dir.path}: pairVerified=${record.pairVerified}, ${record.video.bytes.size} stream bytes")
+            }
         }
     }
 
@@ -260,18 +303,84 @@ object MockLegacyReceiver {
         }
     }
 
+    /**
+     * What the mock saw of one RTSP type-110 session.
+     *
+     * The mock cannot unwrap [ekey] -- that is the receiver half of FairPlay,
+     * which is not vendored -- so a test that knows the raw stream key derives
+     * the video key itself and decrypts [video] with it.
+     */
+    class RtspRecord(
+        /**
+         * The `timingPort` the SETUP reply advertises. Zero, like LonelyScreen's
+         * empty reply, reads as "no timing client"; non-zero is what RPiPlay and
+         * iPhoneMirror answer, which moves the sender's key seed to mixed.
+         */
+        val advertisedTimingPort: Int = 0,
+    ) {
+        @Volatile var pairVerified = false
+            internal set
+
+        /** The X25519 secret, receiver side: what a mixing receiver hashes into the key. */
+        @Volatile var sharedSecret: ByteArray? = null
+            internal set
+        @Volatile var ekey: ByteArray? = null
+            internal set
+        @Volatile var eiv: ByteArray? = null
+            internal set
+        @Volatile var streamConnectionId: Long? = null
+            internal set
+
+        /** The m3 the sender's FairPlay handshake carried, which the ekey is unwrapped with. */
+        @Volatile var m3: ByteArray? = null
+            internal set
+
+        /** Timing queries the sender answered correctly (`80 d3`, our origin echoed). */
+        @Volatile var timingReplies = 0
+            internal set
+
+        @Volatile var teardown = false
+            internal set
+
+        /** The data channel, as received. */
+        val video = StreamRecorder()
+    }
+
+    /** One connection's pair-verify state, receiver side. */
+    private class RtspConnection(val record: RtspRecord, val peer: InetAddress, val local: InetAddress) {
+        var clientX: ByteArray? = null
+        var clientEd: ByteArray? = null
+        var ours: HapCrypto.X25519KeyPair? = null
+        var secret: ByteArray? = null
+    }
+
+    /** The receiver's long-term Ed25519 identity, as `/pair-setup` hands it out. */
+    private val identity by lazy { HapCrypto.Ed25519KeyPair.generate() }
+
     private fun serve(
         socket: Socket,
         policy: SessionPolicy,
         seenLocalSaps: MutableSet<String>,
         recorder: StreamRecorder,
+        rtsp: RtspRecord? = null,
     ) {
         socket.use { s ->
             s.tcpNoDelay = true
             val input = BufferedInputStream(s.getInputStream())
             val output = BufferedOutputStream(s.getOutputStream())
+            val connection = rtsp?.let { RtspConnection(it, s.inetAddress, s.localAddress) }
             while (true) {
                 val request = readRequest(input) ?: return
+                if (connection != null && request.uri.startsWith("/fp-setup") && request.body.size == FairPlayRecords.M3_BYTES) {
+                    connection.record.m3 = request.body
+                }
+                if (connection != null) {
+                    when (respondRtsp(request, output, connection)) {
+                        false -> return
+                        true -> continue
+                        null -> Unit
+                    }
+                }
                 if (!respond(request, output, policy, seenLocalSaps, input, recorder)) return
             }
         }
@@ -346,6 +455,158 @@ object MockLegacyReceiver {
         seenLocalSaps: MutableSet<String>,
         recorder: StreamRecorder,
     ) = serve(socket, policy, seenLocalSaps, recorder)
+
+    /**
+     * Serves one connection as a receiver that also speaks the RTSP type-110
+     * path, recording that session into [rtsp].
+     */
+    internal fun serveRtspForTest(
+        socket: Socket,
+        policy: SessionPolicy,
+        seenLocalSaps: MutableSet<String>,
+        rtsp: RtspRecord,
+    ) = serve(socket, policy, seenLocalSaps, StreamRecorder(), rtsp)
+
+    /**
+     * The RTSP type-110 requests, answered the way RPiPlay's `raop_handlers.h`
+     * does. Returns null for a request that is not part of that path, so the
+     * FairPlay and `/info` handlers still serve it; false to close.
+     */
+    private fun respondRtsp(request: Request, output: OutputStream, c: RtspConnection): Boolean? {
+        val base = listOf("CSeq" to (request.header("CSeq") ?: "1"), "Server" to SERVER_HEADER)
+        val octets = base + ("Content-Type" to "application/octet-stream")
+        val bplist = base + ("Content-Type" to "application/x-apple-binary-plist")
+        when {
+            request.uri == "/pair-setup" -> {
+                if (request.body.size != 32) return false
+                c.clientEd = request.body
+                writeResponse(output, RTSP, 200, "OK", octets, identity.publicKey)
+            }
+
+            request.uri == "/pair-verify" && request.body.firstOrNull() == 1.toByte() -> {
+                if (request.body.size != 4 + 32 + 32) return false
+                val clientX = request.body.copyOfRange(4, 36)
+                val ours = HapCrypto.X25519KeyPair.generate()
+                val secret = ours.agree(clientX)
+                c.clientX = clientX
+                c.ours = ours
+                c.secret = secret
+                val signature = identity.sign(ours.publicKey + clientX)
+                writeResponse(output, RTSP, 200, "OK", octets, ours.publicKey + keystream(secret).update(signature))
+            }
+
+            request.uri == "/pair-verify" && request.body.firstOrNull() == 0.toByte() -> {
+                val secret = c.secret ?: return false
+                val clientEd = c.clientEd ?: return false
+                if (request.body.size != 4 + 64) return false
+                // The first 64 bytes of keystream went on our own signature.
+                val cipher = keystream(secret).also { it.update(ByteArray(64)) }
+                val signature = cipher.update(request.body.copyOfRange(4, 68))
+                if (!HapCrypto.ed25519Verify(clientEd, c.clientX!! + c.ours!!.publicKey, signature)) {
+                    writeResponse(output, RTSP, 470, "Connection Authorization Required", base, ByteArray(0))
+                    return false
+                }
+                c.record.pairVerified = true
+                c.record.sharedSecret = secret
+                writeResponse(output, RTSP, 200, "OK", octets, ByteArray(0))
+            }
+
+            request.method == "SETUP" -> {
+                val dict = runCatching { BinaryPlist.decode(request.body) }.getOrNull() as? PlistValue.PDict
+                    ?: return false
+                val reply = linkedMapOf<String, PlistValue>()
+                val ekey = (dict["ekey"] as? PlistValue.PData)?.value
+                val eiv = (dict["eiv"] as? PlistValue.PData)?.value
+                if (ekey != null && eiv != null) {
+                    c.record.ekey = ekey
+                    c.record.eiv = eiv
+                    (dict["timingPort"] as? PlistValue.PInt)?.value?.toInt()?.let { queryTiming(c.peer, it, c.record) }
+                    reply["eventPort"] = PlistValue.PInt(0)
+                    reply["timingPort"] = PlistValue.PInt(c.record.advertisedTimingPort.toLong())
+                }
+                val streams = (dict["streams"] as? PlistValue.PArray)?.values.orEmpty()
+                if (streams.isNotEmpty()) {
+                    val stream = streams.first() as? PlistValue.PDict ?: return false
+                    if ((stream["type"] as? PlistValue.PInt)?.value != 110L || c.record.ekey == null) return false
+                    c.record.streamConnectionId = (stream["streamConnectionID"] as? PlistValue.PInt)?.value
+                    val server = ServerSocket(0, 1, c.local)
+                    thread(isDaemon = true) {
+                        server.use {
+                            val data = runCatching { it.accept() }.getOrNull() ?: return@thread
+                            data.use { d -> drainPackets(d.getInputStream(), c.record.video) }
+                        }
+                    }
+                    reply["streams"] = PlistValue.PArray(
+                        listOf(
+                            PlistValue.dict(
+                                "type" to PlistValue.PInt(110),
+                                "dataPort" to PlistValue.PInt(server.localPort.toLong()),
+                            )
+                        )
+                    )
+                }
+                writeResponse(output, RTSP, 200, "OK", bplist, BinaryPlist.encode(PlistValue.PDict(reply)))
+            }
+
+            request.method == "RECORD" ->
+                writeResponse(output, RTSP, 200, "OK", base + ("Audio-Latency" to "11025"), ByteArray(0))
+
+            request.uri == "/feedback" ->
+                writeResponse(output, RTSP, 200, "OK", base, ByteArray(0))
+
+            request.method == "TEARDOWN" -> {
+                c.record.teardown = true
+                writeResponse(output, RTSP, 200, "OK", base, ByteArray(0))
+                return false
+            }
+
+            else -> return null
+        }
+        return true
+    }
+
+    private const val RTSP = "RTSP/1.0"
+
+    /** The pair-verify AES-CTR keystream both sides derive from the X25519 secret. */
+    private fun keystream(secret: ByteArray): Cipher {
+        fun derive(salt: String) = MessageDigest.getInstance("SHA-512").run {
+            update(salt.toByteArray())
+            update(secret)
+            digest().copyOf(16)
+        }
+        return Cipher.getInstance("AES/CTR/NoPadding").apply {
+            init(
+                Cipher.ENCRYPT_MODE,
+                SecretKeySpec(derive("Pair-Verify-AES-Key"), "AES"),
+                IvParameterSpec(derive("Pair-Verify-AES-IV")),
+            )
+        }
+    }
+
+    /**
+     * Sends one AirTunes timing query to the sender, as RPiPlay's `raop_ntp`
+     * does after the first SETUP, and counts a well-formed answer.
+     */
+    private fun queryTiming(peer: InetAddress, port: Int, record: RtspRecord) {
+        runCatching {
+            DatagramSocket().use { udp ->
+                udp.soTimeout = 2_000
+                val query = ByteArray(32)
+                query[0] = 0x80.toByte()
+                query[1] = 0xd2.toByte()
+                query[3] = 0x07
+                val origin = 0x1122334455667788L
+                ByteBuffer.wrap(query, 24, 8).putLong(origin)
+                udp.send(DatagramPacket(query, query.size, peer, port))
+                val reply = DatagramPacket(ByteArray(64), 64)
+                udp.receive(reply)
+                val bytes = reply.data.copyOf(reply.length)
+                if (bytes.size == 32 && bytes[1] == 0xd3.toByte() && ByteBuffer.wrap(bytes, 8, 8).long == origin) {
+                    record.timingReplies++
+                }
+            }
+        }
+    }
 
     private data class Request(
         val method: String,

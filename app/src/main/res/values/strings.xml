@@ -37,6 +37,17 @@
     <string name="forget_dialog_body">To mirror to it again, this phone will have to pair again with its AirPlay password.</string>
 
     <string name="action_mirror">Mirror screen</string>
+    <string name="action_add_by_address">Add by address</string>
+    <string name="action_add">Add</string>
+    <string name="add_address_title">Add a receiver by address</string>
+    <string name="add_address_body">For a receiver discovery cannot see: across a VPN, or this computer (10.0.2.2) from an emulator.</string>
+    <string name="add_address_host_label">Host or IP address</string>
+    <string name="add_address_port_label">Port</string>
+    <string name="add_address_added">Added %1$s</string>
+    <string name="legacy_key_auto">Video key: automatic</string>
+    <string name="legacy_key_raw">Video key: raw FairPlay key</string>
+    <string name="legacy_key_mixed">Video key: mixed with pairing</string>
+    <string name="legacy_key_hint">Connects but shows nothing? Change this and mirror again.</string>
     <string name="mirror_channel_name">Screen mirroring</string>
     <string name="mirror_notification_title">Mirroring to %1$s</string>
     <string name="mirror_status_consent">Waiting for screen capture permission…</string>

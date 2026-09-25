@@ -1,15 +1,15 @@
 # Legacy (AirPlay 1) support - progress notes
 
-> ## FairPlay is DONE - verified on real hardware
+> ## Legacy mirroring WORKS - picture verified on two real receivers (2026-09-25)
 >
-> The SAP response core is complete and a live receiver accepts it (**5/5 runs**).
-> Two real bugs were found by hardware testing and fixed: Phase 2 was entirely
-> missing, and the m3 body was not encrypted. See
-> **[fairplay-status.md](fairplay-status.md)**.
+> The RTSP type-110 path (below) mirrors to **LonelyScreen** and **iPhoneMirror**:
+> pair-verify, FairPlay, the `ekey` wrap, AES-CTR video, all accepted, and the
+> picture shown and seen by eye. The app itself, running in an Android emulator,
+> mirrored its own live screen to LonelyScreen through `MirrorService`.
 >
-> What remains is verifying the **session** that follows the handshake
-> (`/stream.xml`, `POST /stream`, the ekey wrap) against a real receiver - it has
-> only ever run against the mock.
+> The FairPlay SAP core is the one described in
+> **[fairplay-status.md](fairplay-status.md)**. The port-7100 `/stream` path is
+> still verified only against the mock: no receiver here really serves it.
 
 Working notes for the legacy-AirPlay sender work. The research report is
 [fairplay-research.md](fairplay-research.md); this file tracks **implementation**
@@ -26,9 +26,9 @@ whether it advertises **HAP pairing**:
 | Control channel | HAP-encrypted | plaintext |
 | Video key | HKDF from pair-verify secret | FairPlay `ekey` (72-byte `FPLY`) |
 | Video crypto | HAP frames | **AES-CTR** |
-| Mirror endpoint | RTSP `SETUP`, stream type 110 | port 7100 `/stream.xml` + `POST /stream` |
-| Clock | PTP (or NTP) | NTP |
-| Status | works, verified on one Apple TV | handshake verified; session not |
+| Mirror endpoint | RTSP `SETUP`, stream type 110 | RTSP `SETUP` type 110 (iOS 9+), or port 7100 `/stream` (iOS 6-8) |
+| Clock | PTP (or NTP) | NTP, receiver-initiated |
+| Status | works, verified on one Apple TV | **type 110 works on two receivers**; port 7100 mock-only |
 
 `MirrorController.refusalFor` used to refuse a receiver without `supportsHapPairing`
 with a message saying it "needs Apple's FairPlay". That message is now obsolete:
@@ -39,6 +39,7 @@ such a receiver takes the legacy path instead.
 | Receiver | Where | m2 challenge | m3 behaviour |
 |---|---|---|---|
 | **LonelyScreen** (Windows) | `192.168.31.51:7000` | **fresh, random per session** | **accepts our m3 (m4)** |
+| **iPhoneMirror 1.8.3** (Windows, `airplay2dll`) | `192.168.31.51:5001` | fresh | **accepts our m3 (m4)** |
 | AirScreen 2.15.1 (Android) | `192.168.31.141:5000` | static | 12-byte refusal frame |
 | AS-2112123AG dongle | (via phone tunnel) | static | 12-byte refusal frame |
 
@@ -62,6 +63,105 @@ Captured ground truth (fixtures in `protocol/src/test/resources/fairplay/`):
 | `hardware_attested.csv` | 7 KB | 12 accepted challenge + localSAP + response triples |
 | `bridge_x9head.csv`, `sap_hash.csv` | 23 KB | 70 component vectors |
 
+## The RTSP type-110 legacy path (iOS 9+) -- what receivers actually speak
+
+Every third-party receiver checked answers this and not port 7100: LonelyScreen
+listens only on 7000, and iPhoneMirror's 7100 answers every request -- even
+`GET /nonexistent` -- with an empty `200`. Implemented in
+`mirror/LegacyRtspMirrorSession.kt`, all on **one** control connection (the
+receiver keeps the FairPlay state per connection, and unwraps `ekey` with the m3
+that connection carried):
+
+```
+GET /info                                   display size (binary or XML plist)
+POST /pair-setup     our Ed25519 pk (32)    -> theirs (32)
+POST /pair-verify    01000000|X25519|Ed     -> their X25519 | AES-CTR(their sig)
+POST /pair-verify    00000000|AES-CTR(sig)  -> 200
+POST /fp-setup x2                           FairPlay SAP (m1..m4)
+SETUP  {ekey, eiv, timingPort, et=32, ...}  -> maybe {eventPort, timingPort}
+SETUP  {streams:[{type:110, streamConnectionID, timestampInfo}]} -> dataPort
+RECORD
+TCP dataPort: 128-byte iOS 9 headers + AES-CTR video; POST /feedback every 2 s;
+the receiver queries our clock over UDP (AirTunes 80 d2 or NTP mode 3)
+```
+
+The pair-verify keystream is **one** AES-CTR stream: the receiver's signature
+takes bytes 0..63 and ours 64..127 (`LegacyPairVerify.kt`).
+
+### The video key: two seeds, and receivers disagree
+
+```
+seed = RAW:   the FairPlay key itself
+seed = MIXED: SHA-512(fairplayKey || pair-verify X25519 secret)[0:16]
+key  = SHA-512("AirPlayStreamKey" + streamConnectionID(decimal, unsigned) || seed)[0:16]
+iv   = SHA-512("AirPlayStreamIV"  + streamConnectionID || seed)[0:16]
+```
+
+Measured on 2026-09-25, each receiver showing a picture with one seed and nothing
+with the other:
+
+| Receiver | Wants | SETUP replies carry a `timingPort` |
+|---|---|---|
+| LonelyScreen | **RAW** | no |
+| iPhoneMirror (`airplay2dll`, RPiPlay lineage) | **MIXED** | yes |
+
+`X-Apple-PD: 1` on the pairing requests (doubletake's signal for mixing) did not
+move LonelyScreen to MIXED. `KeySeed.AUTO` therefore mixes when a SETUP reply
+advertised a `timingPort` and uses RAW otherwise. That is a heuristic from two
+receivers, not a rule -- doubletake reports a real Apple TV 3 that queries timing
+yet wants RAW -- so the app lets the user override it per receiver (row menu,
+"Video key", `LegacyVideoKeyStore`).
+
+### The iOS 9 packet header
+
+The type-110 data channel uses the header current senders send (the one the
+AirPlay 2 path already sends an Apple TV), not the nto one: type is byte 4 alone,
+byte 5 is `0x10` on a keyframe, bytes 6-7 are `16 01` on a codec packet (UxPlay
+tells H.264 from HEVC by byte 6) and `1e 00` on a heartbeat; the codec packet
+carries the picture size as floats at 16, 40 and 56. Timestamps count from 1970
+(RPiPlay reads them without the NTP epoch shift). LonelyScreen displayed both
+header styles; iPhoneMirror was only tried with this one.
+
+### Things only hardware showed
+
+- **iPhoneMirror renders nothing until a clock query is answered.** From the
+  Android emulator, behind QEMU's NAT, it accepted the whole session and sat in
+  "Handshaking" -- yet the very same encoded stream, recorded by the mock and
+  replayed from the PC, displayed. Forwarding UDP 7010 into the emulator
+  delivered the queries, but QEMU rewrites the reply's source port, which a
+  connected socket drops. An emulator limitation, not the app's; a phone on the
+  LAN answers from the port it was asked on.
+- **A decoder that attaches late needs SPS/PPS again.** iPhoneMirror opens its
+  pipeline seconds into the stream; with the codec packet sent once it decoded
+  nothing, however many IDRs followed. `LegacyVideoStream` now sends the codec
+  packet before every keyframe.
+- **A new sender id triggers a first-connection dialog** on iPhoneMirror. The app
+  presents one stable id per install (`LegacyVideoKeyStore.deviceId`).
+- **The emulator's H.264 encoder ignores a 1 s keyframe interval** (IDR every
+  ~5 s) and emits ~7 fps from a still screen.
+- **Android's XML parser threw on `isXIncludeAware = false`**, so every XML plist
+  -- including an AppleTV3's `/info` -- failed to parse on a phone while passing
+  every JVM test. Fixed in `XmlPlist`.
+- LonelyScreen crashed (access violation) once on an early emulator stream; not
+  reproduced after the codec-resend and header changes, cause unknown.
+
+### How the stream was checked when a receiver showed nothing
+
+`MockLegacyReceiver --rtsp <dir>` records each session's m3, `ekey`, `eiv`,
+stream id and data channel. Because the mock's m2 is the static capture, the key
+can then be unwrapped offline with any `playfair_decrypt` (airplay2-receiver's
+Python port was used) and the app's real frames decrypted and fed to ffmpeg. The
+same oracle unwrapped 8/8 `ekey` records this code wrapped; they are pinned in
+`keywrap_playfair_verified.csv` (`FairPlayKeyWrapPlayfairTest`).
+
+### Adding a receiver by address
+
+mDNS does not cross a VPN or reach the host from an emulator, so the picker has
+**Add by address**: `AddressLookup` asks `/info` (with the `txtAirPlay`
+qualifier an Apple TV honours) and maps a plain `/info` dictionary onto the same
+TXT keys, so the transport rule applies unchanged. From the emulator the host is
+`10.0.2.2`.
+
 ## Implemented
 
 | File | State |
@@ -82,7 +182,13 @@ Captured ground truth (fixtures in `protocol/src/test/resources/fairplay/`):
 | `mirror/LegacyStreamPackets.kt` | 128-byte header packetisation + `NtpClock` |
 | `mirror/LegacyVideoStream.kt` | AES-CTR frame encryption + packet writer |
 | `mirror/LegacyMirrorSession.kt` | `/stream.xml` + `POST /stream` |
-| `mirror/LegacyMirrorSessionFactory.kt` | the whole legacy handshake in one call |
+| `mirror/LegacyMirrorSessionFactory.kt` | `connect`: RTSP type 110 first, port 7100 if refused |
+| `mirror/LegacyRtspMirrorSession.kt` | the RTSP type-110 session; **hardware-verified** |
+| `mirror/LegacyTimingServer.kt` | answers the receiver's clock queries; UDP 7010 if free |
+| `pairing/LegacyPairVerify.kt` | Ed25519 `/pair-setup` + two-round `/pair-verify` |
+| `AddressLookup.kt` | a device from `/info`, for receivers mDNS cannot see |
+| `devtools/LegacyMirrorProbe.kt` | streams a file over either legacy path from the PC |
+| app: `LegacyVideoKeyStore` | per-receiver key seed override, stable sender id |
 | `mirror/VideoStreamSink.kt` | shared sink so `ScreenEncoder` serves both protocols |
 | `protocol/MirrorTransport.kt` | the one place the HAP-vs-legacy decision is made |
 | `devtools/MockLegacyReceiver.kt` | offline fixture receiver, two session policies |
@@ -206,8 +312,16 @@ Both are pinned by tests (`LegacyVideoStreamTest`).
 
 ## Verification status
 
-- `:protocol:test` - **266 tests, 0 failures** (3 skipped: the live-hardware tests).
-- `:app:assembleDebug` - builds; APK produced.
+- **Live picture, RTSP type 110, 2026-09-25** (all seen by eye):
+  - PC probe -> LonelyScreen: labelled test clip displayed (RAW seed).
+  - PC probe -> iPhoneMirror: displayed, "Streaming 1280x720 30 fps", clock
+    queries answered (MIXED seed, chosen by `AUTO`).
+  - **App in an Android 12 emulator -> LonelyScreen**: the emulator's live screen
+    displayed for over a minute, stopped cleanly from the app's Stop button.
+  - App in the emulator -> iPhoneMirror: session accepted, no picture (the NAT
+    issue above); the recorded stream replayed from the PC displayed.
+- `:protocol:test` - **299 tests, 0 failures** (4 skipped: the live-hardware tests).
+- `:app:assembleDebug` builds; `:app:lintDebug` reports no issues.
 - **Live hardware: a receiver accepts our m3, and distinguishes it from a wrong
   one.** 5/5 consecutive runs against LonelyScreen. This is the decisive evidence:
   `FairPlaySapSession.handshake()` returns only when the receiver answers our m3
@@ -247,6 +361,9 @@ Both are pinned by tests (`LegacyVideoStreamTest`).
 - The transport rule is pinned against **real** feature words observed on the
   network, and a test guards the fixtures themselves so a "fixed" feature word
   cannot make the routing test pass while the rule is wrong.
+- **Digest auth on the legacy path** (`LegacyDigestAuthTest`): the retry rules,
+  plus a check that recomputes the digest the way a receiver would and requires
+  our header to match. Untested against a real password-protected receiver.
 
 ### LonelyScreen cannot test the mirroring session
 
@@ -308,13 +425,16 @@ Lesson: a race fix that passes once proves nothing. This one only surfaced under
 
 ## NOT verified
 
-- **No receiver has accepted a full legacy mirroring session.** The FairPlay
-  handshake is verified on hardware, but everything after it - `/stream.xml`,
-  `POST /stream`, the packetised video - has only run against the mock.
-- Whether a receiver unwraps the `param1` record this code produces. Its *layout*
-  is verified against two real captures; its *values* are not.
-- Whether a receiver enforces AES-CTR on video frames, or accepts them in the
-  clear. The captures do not settle it.
+- **The port-7100 path on hardware.** `/stream.xml` + `POST /stream` has only run
+  against the mock; no receiver available serves it.
+- **A real phone.** Everything app-side ran in the emulator. A phone on the LAN
+  should also reach iPhoneMirror (its clock replies are not NAT-rewritten), but
+  that has not been seen.
+- **The AS-2112123AG dongle and AirServer** were not reachable. The dongle
+  answered `/stream.xml` on 7100 in an old capture, so it may be the first real
+  port-7100 target.
+- Which seed receivers other than the two above want; `AUTO` is a heuristic.
+- Password-protected legacy receivers (Digest) on hardware.
 - Audio: the legacy path stops audio capture. AirPlay 1 mirroring audio is the
   RAOP RTP path, which is not implemented, so **legacy mirroring is video-only**.
 - **Which of the two key derivations a given receiver wants.** The port-7100
@@ -325,31 +445,45 @@ Lesson: a race fix that passes once proves nothing. This one only surfaced under
 
 ## Known gaps, in priority order
 
-1. **Verify the legacy session on hardware.** The handshake works; the session
-   that follows has never been exercised against a real receiver.
-2. **Legacy password pairing.** `LegacyMirrorSessionFactory.open` *refuses* a
-   non-empty password rather than ignoring it: legacy SRP pairing exists
-   (`LegacyPairing`) but is not wired in. Refusing keeps a password-protected
-   receiver from failing at `/fp-setup` and sending the next person to debug the
-   wrong layer.
-3. **Legacy audio.** Video-only today.
-4. **The `/stream` port is assumed to be 7100** unless overridden. The dongle
+1. **Run on a real phone**, against iPhoneMirror (needs the clock replies) and
+   LonelyScreen.
+2. **Legacy audio.** Video-only today: the AirPlay 1 mirroring audio channel is the
+   RAOP RTP path, which is not implemented.
+3. **The `/stream` port is assumed to be 7100** unless overridden. The dongle
    answered `/stream.xml` on 7100 but its RTSP is on 5000; a device that puts both
    on one port needs the caller to pass `streamPort`.
-5. **The `POST /stream` body is minimal.** The spec's example also carries
+4. **The `POST /stream` body is minimal.** The spec's example also carries
    `fpsInfo` and `timestampInfo` arrays, and UxPlay notes a `streams[]` variant
    with a `streamConnectionID`. Only the fields the nto spec marks as meaningful
    are sent; a strict receiver may want more.
+5. **The Digest `uri` for `/stream` is the path only.** Digest is computed over
+   the request URI as sent; a receiver that expects an absolute `rtsp://` URI in
+   the digest would reject it. Untested against a password-protected receiver.
+
+## Password-protected receivers: Digest, not SRP
+
+An earlier version of this file said a password-protected legacy receiver "wants
+legacy SRP pairing". **That was wrong.** The nto spec's "Password Protection"
+section is explicit:
+
+> An AirPlay server can require a password ... This is implemented using standard
+> HTTP Digest Authentication (RFC 2617), over RTSP for AirTunes, and HTTP for
+> everything else.
+
+with realm `AirPlay` and username `AirPlay` for the AirPlay service (the AirTunes
+service uses realm `raop`, username `iTunes`).
+
+So the legacy path answers the receiver's `401` challenge with a Digest header on
+the same connection -- no pairing step, and the FairPlay handshake itself is
+unauthenticated. `LegacyPairing` (the `/pair-setup-pin` SRP flow) is a *different*
+mechanism, used by receivers that show an on-screen PIN, and is not what this path
+needs.
 
 ## Next steps
 
-1. **Verify the session on hardware**, preferring LonelyScreen (already accepts
-   our handshake) then AirScreen.
-2. Wire legacy SRP pairing in, so password-protected receivers work.
+1. Mirror from a real phone to iPhoneMirror and LonelyScreen.
+2. Try the dongle when it is reachable -- the likeliest real port-7100 receiver.
 3. Implement the RAOP RTP audio path for legacy mirroring audio.
-4. If hardware shows a receiver wants the RTSP SETUP type-110 path instead of
-   port-7100 `/stream`, implement that alongside and select by what the receiver
-   answers.
 
 ## Licensing
 

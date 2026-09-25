@@ -47,7 +47,10 @@ object XmlPlist {
     private fun newSecureFactory(): DocumentBuilderFactory =
         DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = false
-            isXIncludeAware = false
+            // false is already the default. Android's factory does not override
+            // setXIncludeAware, and the base method throws for any value -- which
+            // made every XML plist fail to parse on a phone while passing on the JVM.
+            runCatching { isXIncludeAware = false }
             isExpandEntityReferences = false
             setFeatureQuietly("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
             setFeatureQuietly("http://xml.org/sax/features/external-general-entities", false)

@@ -8,13 +8,18 @@ import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayResponder
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayResponderImpl
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlaySapSession
 import tw.avianjay.airplaydroid.protocol.http.SocketAirPlayConnection
+import tw.avianjay.airplaydroid.protocol.pairing.LegacyPairVerify
 import java.io.Closeable
 import java.security.SecureRandom
 
 /**
  * Opens a **legacy (AirPlay 1)** mirroring session end to end.
  *
- * The sequence, against the receiver's RTSP port:
+ * [connect] is the entry point: it tries the RTSP type-110 path
+ * ([LegacyRtspMirrorSession]) that current senders use, and falls back to the
+ * iOS 6-8 port-7100 path in [open] only when the receiver refuses the first.
+ *
+ * The port-7100 sequence, against the receiver's RTSP port:
  *
  * ```
  * 1. FairPlay SAP:  m1 -> m2 -> m3 -> m4          (FairPlaySapSession)
@@ -35,11 +40,11 @@ import java.security.SecureRandom
  *
  * ### What is verified
  *
- * Every step has offline tests against captured bytes, the FairPlay core passes
- * 70 conformance vectors, and [LegacySessionEndToEndTest] drives this whole
- * method against a mock receiver. **No real receiver has accepted a session from
- * this code yet** -- the dongle that was available had gone offline. Treat the
- * first hardware run as the real test.
+ * The RTSP type-110 path is verified on hardware: LonelyScreen, which issues a
+ * fresh FairPlay challenge per session, unwrapped our `ekey`, decrypted the
+ * video and displayed it. The port-7100 path has only run against
+ * [tw.avianjay.airplaydroid.protocol.devtools.MockLegacyReceiver]; no receiver
+ * that serves port 7100 has been available.
  */
 object LegacyMirrorSessionFactory {
 
@@ -51,15 +56,101 @@ object LegacyMirrorSessionFactory {
         val video: LegacyVideoStream,
         /** The underlying socket, closed with [video]. */
         private val socket: Closeable,
+        /** Answers the receiver's NTP queries on port 7010; closed with the rest. */
+        private val timing: LegacyTimingServer? = null,
     ) : Closeable {
+        /** How many clock queries the receiver has made; zero means it never asked. */
+        val timingQueries: Int get() = timing?.answered?.get() ?: 0
+
         override fun close() {
             runCatching { video.close() }
             runCatching { socket.close() }
+            runCatching { timing?.close() }
         }
     }
 
     /** Why a legacy session could not be opened. */
-    class Failure(message: String, cause: Throwable? = null) : Exception(message, cause)
+    class Failure(message: String, cause: Throwable? = null) : Exception(message, cause) {
+        /** True when the receiver answered 401: the password is missing or wrong. */
+        val passwordRejected: Boolean
+            get() = generateSequence(cause) { it.cause }
+                .any { it is LegacyRtspMirrorSession.Failure.Refused && it.status == HTTP_UNAUTHORIZED }
+    }
+
+    /** Which legacy protocol a [Connected] session speaks. */
+    enum class Path {
+        /** RTSP `SETUP` type 110 and a `dataPort`: iOS 9 and later. */
+        RTSP_TYPE_110,
+
+        /** `/stream.xml` and `POST /stream` on port 7100: iOS 6-8. */
+        PORT_7100,
+    }
+
+    /** A legacy session, on whichever path the receiver accepted. */
+    class Connected(
+        val path: Path,
+        /** The receiver's display, when it reported one. */
+        val display: ReceiverDisplay?,
+        /** Where encoded frames go. */
+        val video: VideoStreamSink,
+        private val resource: Closeable,
+    ) : Closeable {
+        override fun close() {
+            runCatching { resource.close() }
+        }
+    }
+
+    /**
+     * Opens a legacy session on whichever path the receiver speaks.
+     *
+     * The RTSP type-110 path goes first: it is what every sender since iOS 9
+     * uses, and several receivers (LonelyScreen, RPiPlay, UxPlay) serve nothing
+     * else. Port 7100 is tried only when that path is **refused** -- a SETUP
+     * answered with an error, or a reply with no `dataPort`. A failed FairPlay
+     * handshake, a 401 or an unreachable receiver is reported as is, because
+     * port 7100 would fail the same way and hide the real reason.
+     *
+     * [onEnded] is told when the receiver ends an RTSP session; the port-7100
+     * path has no such signal, and its end shows up as a failed write instead.
+     */
+    fun connect(
+        host: String,
+        rtspPort: Int,
+        password: String? = null,
+        senderName: String = "AirPlayDroid",
+        streamPort: Int = LegacyMirrorSession.DEFAULT_PORT,
+        random: SecureRandom = SecureRandom(),
+        responder: FairPlayResponder = FairPlayResponderImpl,
+        onEnded: (String) -> Unit = {},
+        trace: (String) -> Unit = {},
+        keySeed: LegacyRtspMirrorSession.KeySeed = LegacyRtspMirrorSession.KeySeed.AUTO,
+        deviceId: String = LegacyRtspMirrorSession.macFrom(random),
+    ): Connected {
+        val rtsp = try {
+            LegacyRtspMirrorSession.open(
+                Endpoint(host, rtspPort), password, senderName, random, responder,
+                listener = { onEnded(it) }, trace = trace, keySeed = keySeed, deviceId = deviceId,
+            )
+        } catch (e: LegacyRtspMirrorSession.Failure) {
+            if (e is LegacyRtspMirrorSession.Failure.Refused && e.status == HTTP_UNAUTHORIZED) {
+                throw Failure("$host refused the password (${e.message})", e)
+            }
+            trace("RTSP mirroring refused (${e.message}); trying port $streamPort")
+            val opened = try {
+                open(host, rtspPort, password, streamPort, random, responder)
+            } catch (f: Failure) {
+                throw Failure("$host refused RTSP mirroring (${e.message}) and port $streamPort (${f.message})", f)
+            }
+            return Connected(Path.PORT_7100, opened.display, opened.video, opened)
+        } catch (e: FairPlaySapSession.Failure) {
+            throw Failure("FairPlay handshake failed: ${e.message}", e)
+        } catch (e: LegacyPairVerify.Failure) {
+            throw Failure("pairing failed: ${e.message}", e)
+        } catch (e: java.io.IOException) {
+            throw Failure("could not mirror to $host:$rtspPort: ${e.message}", e)
+        }
+        return Connected(Path.RTSP_TYPE_110, rtsp.display, rtsp, rtsp)
+    }
 
     /**
      * Runs the whole legacy handshake.
@@ -69,15 +160,10 @@ object LegacyMirrorSessionFactory {
      * answers RTSP on 5000 and `/stream.xml` on 7100, which is why they are
      * separate parameters rather than one port.
      *
-     * ### Password-protected receivers are not supported yet
+     * ### Password-protected receivers
      *
-     * A password-protected legacy receiver wants **legacy SRP pairing** before the
-     * FairPlay handshake. `LegacyPairing` implements that, but it is not wired in
-     * here, so a non-null [password] is refused rather than accepted and ignored.
-     *
-     * Refusing is deliberate. Accepting the parameter and dropping it would make a
-     * password-protected receiver fail at `/fp-setup` with a message about
-     * FairPlay, sending the next person to debug the wrong layer entirely.
+     * [password] answers the receiver's HTTP Digest challenge on the mirroring
+     * endpoint (realm `AirPlay`, username `AirPlay`); see [LegacyMirrorSession].
      */
     fun open(
         host: String,
@@ -139,7 +225,9 @@ object LegacyMirrorSessionFactory {
             throw Failure("could not wrap the stream key: ${e.message}", e)
         }
 
-        // --- 4. Start the stream.
+        // --- 4. Start the stream. The receiver starts querying our clock on
+        // port 7010 as soon as it has the request, so answer before sending it.
+        val timing = runCatching { LegacyTimingServer() }.getOrNull()
         val request = LegacyMirrorSession.StreamRequest(
             deviceId = DEVICE_ID,
             sessionId = random.nextInt() and 0x7FFF_FFFF,
@@ -152,6 +240,7 @@ object LegacyMirrorSessionFactory {
         val open = try {
             mirror.startStream(request)
         } catch (e: Exception) {
+            runCatching { timing?.close() }
             throw Failure("POST /stream failed: ${e.message}", e)
         }
 
@@ -160,6 +249,7 @@ object LegacyMirrorSessionFactory {
             display = ReceiverDisplay(info.width, info.height),
             video = video,
             socket = open,
+            timing = timing,
         )
     }
 
@@ -171,4 +261,6 @@ object LegacyMirrorSessionFactory {
 
     /** The spec's example latency. */
     const val LATENCY_MS = 100
+
+    private const val HTTP_UNAUTHORIZED = 401
 }

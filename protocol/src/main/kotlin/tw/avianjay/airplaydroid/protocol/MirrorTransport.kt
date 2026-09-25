@@ -30,9 +30,10 @@ enum class MirrorTransport {
     HAP,
 
     /**
-     * AirPlay 1: the FairPlay SAP handshake, then port-7100 `/stream.xml` and
-     * `POST /stream`. The video key is wrapped by FairPlay and the payload is
-     * AES-CTR encrypted.
+     * AirPlay 1: legacy pair-verify and the FairPlay SAP handshake, then RTSP
+     * `SETUP` type 110 -- or, for an iOS 6-8 era receiver, port-7100
+     * `/stream.xml` and `POST /stream`. The video key is wrapped by FairPlay and
+     * the payload is AES-CTR encrypted.
      */
     LEGACY,
 

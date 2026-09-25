@@ -117,6 +117,16 @@ class XmlPlistTest {
     }
 
     @Test
+    fun `the captured AppleTV3 info XML decodes`() {
+        // What an AirTunes/220.68 receiver answers GET /info with; AddressLookup
+        // and the RTSP legacy session both read it.
+        val body = javaClass.getResourceAsStream("/fairplay/appletv32_info_body.bin")!!.readBytes()
+        val info = Plists.decode(body) as PlistValue.PDict
+        assertEquals("AppleTV3,2", info.string("model"))
+        assertEquals(PlistValue.PInt(61647880183L), info["features"])
+    }
+
+    @Test
     fun `malformed XML is rejected`() {
         assertFailsWith<XmlPlist.FormatException> {
             XmlPlist.decode("<plist><dict><key>a</key>".toByteArray())

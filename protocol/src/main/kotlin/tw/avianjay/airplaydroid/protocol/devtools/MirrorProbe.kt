@@ -128,10 +128,10 @@ object MirrorProbe {
         }
     }
 
-    private class AccessUnit(val avcc: ByteArray, val idr: Boolean, val avcC: ByteArray?)
+    internal class AccessUnit(val avcc: ByteArray, val idr: Boolean, val avcC: ByteArray?)
 
     /** Groups NAL units into access units at each AUD, lifting SPS/PPS into avcC. */
-    private fun accessUnits(stream: ByteArray): List<AccessUnit> {
+    internal fun accessUnits(stream: ByteArray): List<AccessUnit> {
         val units = mutableListOf<AccessUnit>()
         var current = mutableListOf<ByteArray>()
         var sps: ByteArray? = null

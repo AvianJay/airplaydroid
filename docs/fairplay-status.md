@@ -74,13 +74,11 @@ vector, or a receiver — can see them. The lesson is recorded because it cost t
 rounds: **"N/N vectors pass" is a statement about what those vectors cover, and
 nothing more.**
 
-## Remaining work (not FairPlay)
+## After the handshake (2026-09-25)
 
-FairPlay is done. What is left for legacy mirroring is verification of the
-*session* that follows it — see [legacy-airplay-notes.md](legacy-airplay-notes.md):
-
-1. The `/stream.xml` + `POST /stream` session has only ever been exercised against
-   the mock receiver, never a real one.
-2. The `param1` ekey wrap is verified by layout only; no receiver has unwrapped one.
-3. Whether the receiver wants the port-7100 `/stream` path or the RTSP SETUP
-   type-110 path is still unconfirmed on hardware.
+The `ekey` wrap is now verified twice over: an independent `playfair_decrypt`
+unwrapped 8/8 records this code wrapped (pinned in
+`FairPlayKeyWrapPlayfairTest`), and two real receivers, LonelyScreen and
+iPhoneMirror, unwrapped it and displayed the mirrored video. Receivers want the
+**RTSP type-110** path; see [legacy-airplay-notes.md](legacy-airplay-notes.md).
+The port-7100 `/stream` path is still verified against the mock only.

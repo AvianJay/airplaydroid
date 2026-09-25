@@ -43,6 +43,26 @@ object DiscoveryRepository {
     /** Services carried over from an earlier round and not yet seen in this one. */
     private val unconfirmed = HashSet<Pair<String, AirPlayServiceType>>()
 
+    /**
+     * Devices added by address. No browse will ever confirm them -- mDNS is
+     * exactly what could not reach them -- so they are exempt from the
+     * reconfirm sweep and stay until the process ends.
+     */
+    private val manual = HashSet<String>()
+
+    /**
+     * Adds a receiver found by [tw.avianjay.airplaydroid.protocol.AddressLookup]
+     * rather than by discovery, or refreshes it if it is already listed.
+     */
+    @Synchronized
+    fun addManual(device: AirPlayDevice) {
+        manual += device.key
+        unconfirmed.removeAll { it.first == device.key }
+        val existing = devices[device.key]
+        devices[device.key] = existing?.mergeWith(device) ?: device
+        publishDevices()
+    }
+
     /** Runs one discovery round until the caller's scope is cancelled. */
     suspend fun collectFrom(discovery: DeviceDiscovery): Unit = coroutineScope {
         beginRound()
@@ -97,7 +117,7 @@ object DiscoveryRepository {
         // longer applies.
         _state.update { it.copy(lastError = null) }
         unconfirmed.clear()
-        devices.values.forEach { device ->
+        devices.values.filter { it.key !in manual }.forEach { device ->
             if (device.airPlayEndpoint != null) unconfirmed += device.key to AirPlayServiceType.AirPlay
             if (device.raopEndpoint != null) unconfirmed += device.key to AirPlayServiceType.Raop
         }

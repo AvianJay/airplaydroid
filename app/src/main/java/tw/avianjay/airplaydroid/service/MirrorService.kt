@@ -21,6 +21,7 @@ import androidx.core.app.ServiceCompat
 import tw.avianjay.airplaydroid.MainActivity
 import tw.avianjay.airplaydroid.R
 import tw.avianjay.airplaydroid.mirror.AudioCapture
+import tw.avianjay.airplaydroid.mirror.LegacyVideoKeyStore
 import tw.avianjay.airplaydroid.mirror.MirrorController
 import tw.avianjay.airplaydroid.mirror.MirrorLog
 import tw.avianjay.airplaydroid.mirror.MirrorUiState.Phase
@@ -68,7 +69,7 @@ class MirrorService : Service() {
      * Separate from [session] because the two are different protocols with
      * different types; at most one is ever non-null.
      */
-    private var legacy: LegacyMirrorSessionFactory.Opened? = null
+    private var legacy: LegacyMirrorSessionFactory.Connected? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -135,8 +136,8 @@ class MirrorService : Service() {
             ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
 
         // A receiver that does not advertise HAP pairing speaks the legacy
-        // protocol: FairPlay SAP, then port-7100 /stream. Its own path, because
-        // none of the pairing machinery below applies to it.
+        // protocol: FairPlay SAP, then RTSP type 110 (or port-7100 /stream). Its
+        // own path, because none of the pairing machinery below applies to it.
         if (MirrorController.usesLegacyPath(device)) {
             return connectLegacy(device, typedPassword, mp)
         }
@@ -243,9 +244,10 @@ class MirrorService : Service() {
     /**
      * A receiver that does not advertise HAP pairing: the legacy AirPlay 1 path.
      *
-     * FairPlay SAP on the RTSP port, then `/stream.xml` and `POST /stream` on the
-     * mirroring port. No HomeKit pairing, no Digest, and no key derived from a
-     * pair-verify secret -- the stream key is wrapped by FairPlay instead.
+     * Legacy pair-verify and FairPlay SAP on the RTSP port, then RTSP `SETUP`
+     * type 110 -- or, if the receiver refuses that, `/stream.xml` and
+     * `POST /stream` on port 7100. No HomeKit pairing: the stream key is wrapped
+     * by FairPlay. A password is answered with Digest.
      *
      * The legacy path has no audio yet: the AirPlay 1 mirroring audio channel is
      * the RAOP RTP path, which this app does not implement, so any captured audio
@@ -260,10 +262,18 @@ class MirrorService : Service() {
             ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
         try {
             MirrorController.setPhase(Phase.Connecting)
-            val opened = LegacyMirrorSessionFactory.open(
+            val keys = LegacyVideoKeyStore(this)
+            val opened = LegacyMirrorSessionFactory.connect(
                 host = endpoint.host,
                 rtspPort = endpoint.port,
-                password = typedPassword,
+                password = typedPassword?.takeIf { it.isNotEmpty() },
+                senderName = Build.MODEL,
+                onEnded = { reason ->
+                    finish("The connection to ${device.displayName} ended: $reason", why = "legacy session: $reason")
+                },
+                trace = { MirrorLog.write("legacy: $it") },
+                keySeed = keys.get(device.key),
+                deviceId = keys.deviceId(),
             )
 
             val adopted = synchronized(lock) { if (stopping) false else { legacy = opened; true } }
@@ -291,12 +301,22 @@ class MirrorService : Service() {
             }
 
             MirrorLog.write(
-                "legacy mirroring as ${width}x$height (receiver display ${opened.display.width}x${opened.display.height}) " +
-                    "to ${device.displayName}, fairplay=ok"
+                "legacy mirroring (${opened.path}) as ${width}x$height (receiver display ${opened.display}) " +
+                    "to ${device.displayName}"
             )
             MirrorController.setPhase(Phase.Mirroring)
         } catch (e: LegacyMirrorSessionFactory.Failure) {
             Log.w(TAG, "legacy mirroring failed", e)
+            if (e.passwordRejected) {
+                // Nothing was saved for a legacy receiver, so the next tap asks again.
+                MirrorController.markNeedsPassword(device.key)
+                finish(
+                    if (typedPassword.isNullOrEmpty()) "${device.displayName} wants its AirPlay password. Tap it again to enter it."
+                    else getString(R.string.mirror_error_password_rejected, device.displayName),
+                    why = "legacy: ${e.message}",
+                )
+                return
+            }
             finish("Could not mirror to ${device.displayName}: ${e.message}", why = "legacy: ${e.message}")
         } catch (e: Exception) {
             Log.w(TAG, "legacy mirroring failed", e)
@@ -462,7 +482,7 @@ class MirrorService : Service() {
         val e: ScreenEncoder?
         val a: AudioCapture?
         val s: MirrorSession?
-        val l: LegacyMirrorSessionFactory.Opened?
+        val l: LegacyMirrorSessionFactory.Connected?
         val p: MediaProjection?
         synchronized(lock) {
             if (stopping) return

@@ -13,7 +13,7 @@ Package id: `tw.avianjay.airplaydroid`
 | ✅ **Sender** | Android → Apple TV. HomePod / AirPlay speakers: not yet (no audio-only path). |
 | ❌ **Receiver** | This app does *not* make your phone an AirPlay target. |
 | ✅ **Screen mirroring, AirPlay 2** | Picture **and** sound, to an Apple TV on tvOS 26.6. **No FairPlay** — this path derives the video key from the pair-verify secret. Verified on one unit. |
-| ⚠️ **Screen mirroring, legacy (AirPlay 1)** | The FairPlay handshake is **implemented and verified on real hardware** (a receiver accepts it). The session that follows has only run against a mock receiver, so end-to-end mirroring to a dongle is **not yet confirmed**. See [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md). |
+| ✅ **Screen mirroring, legacy (AirPlay 1)** | Picture, no sound, via FairPlay + RTSP type 110. Seen on **LonelyScreen** (from the app in an Android emulator, and from a PC probe) and **iPhoneMirror** (PC probe). Not yet run from a real phone or on a hardware dongle. See [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md). |
 | ⚠️ **Video-URL handoff** | `POST /play` with Digest. Accepted (200) by an AirPlay 2 Apple TV, but playback does not start there; not yet tested on an AirPlay 1 receiver. |
 
 ## Screen mirroring: two protocols, not one
@@ -26,8 +26,8 @@ decided by whether it advertises HAP pairing. Both paths exist in this project:
 | Auth | HomeKit pair-setup / pair-verify | **FairPlay SAP** (`/fp-setup`) |
 | Video key | HKDF from the pair-verify secret | FairPlay `ekey` (72-byte `FPLY`) |
 | Video crypto | HAP frames | AES-CTR |
-| Endpoint | RTSP `SETUP`, stream type 110 | port 7100 `/stream.xml` + `POST /stream` |
-| Status | ✅ works, verified on one Apple TV | ⚠️ handshake verified on hardware; session verified only against a mock |
+| Endpoint | RTSP `SETUP`, stream type 110 | RTSP `SETUP` type 110; port 7100 `/stream` as a fallback |
+| Status | ✅ works, verified on one Apple TV | ✅ type 110 shows a picture on two Windows receivers; port 7100 mock-only |
 
 The AirPlay 2 path needs **no FairPlay at all** — on tvOS 26.6 the whole session
 rests on HomeKit pairing. The phone's screen and its audio play on an Apple TV 4K
@@ -35,12 +35,17 @@ without `/fp-setup` ever being sent.
 
 The legacy path **does** need FairPlay, and this project now implements it: the
 SAP framing, the m3 body cipher, the white-box Phase 1, the SAP-hash and bridge
-components, and Phase 2 (the analytical WB-MD5) — plus the port-7100 `/stream`
-session, the 128-byte packet format and the continuous AES-CTR video keystream.
+components, and Phase 2 (the analytical WB-MD5) — plus legacy pair-verify, the
+RTSP type-110 session, a clock responder, the 128-byte packet format and the
+continuous AES-CTR video keystream. The older port-7100 `/stream` session is
+there too, as a fallback.
 
 The FairPlay half is verified three ways: 142/142 full-chain vectors, 12/12
 hardware-attested vectors, and **a live receiver accepting our m3 in 5/5 runs**.
-The mirroring session after it is verified only against a mock.
+The session after it now shows a picture on LonelyScreen and iPhoneMirror. The
+two receivers want the video key derived differently, and nothing they advertise
+says which; the app guesses from the SETUP reply and lets the user override it
+per receiver.
 
 > Two earlier versions of this file were wrong in opposite directions. The first
 > said mirroring "needs no FairPlay" without qualification — true only of the
@@ -243,14 +248,13 @@ first**, and reading it backwards silently misreads every capability.
 - ✅ HomeKit pairing (persistent), pair-verify, encrypted control channel.
 - ✅ Screen mirroring with sound, and rotation, to a password-protected Apple TV
   (one unit tested).
-- ⚠️ **Legacy (AirPlay 1) mirroring** to dongles and third-party receivers. The
-  FairPlay response core is complete and a live receiver accepts it (142/142
-  full-chain vectors, 12/12 hardware-attested vectors, 5/5 live handshakes). The
-  port-7100 `/stream.xml` + `POST /stream` session, the 128-byte packet format and
-  the continuous AES-CTR video keystream are built, and `MirrorService` routes a
-  receiver without HAP pairing to them — but the session has only been exercised
-  against a mock receiver, so **end-to-end mirroring to a dongle is unconfirmed**.
-  See [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md).
+- ✅ **Legacy (AirPlay 1) mirroring**, video only, to third-party receivers:
+  picture seen on LonelyScreen (from the app in an emulator) and iPhoneMirror (PC
+  probe). Not yet from a real phone, not yet on a hardware dongle, and the
+  port-7100 fallback has only met the mock. See
+  [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md).
+- ✅ **Add a receiver by address**, for one mDNS cannot reach (a VPN, or the host
+  seen from an emulator as `10.0.2.2`).
 - ⬜ Mirroring to receivers that use an on-screen PIN (`flags` bit 9) or transient
   pairing.
 - ⬜ `/play` inside the encrypted channel for AirPlay 2 receivers.

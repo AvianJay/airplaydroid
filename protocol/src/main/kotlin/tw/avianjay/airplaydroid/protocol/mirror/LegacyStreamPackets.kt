@@ -60,6 +60,37 @@ object LegacyStreamPackets {
     fun markerFor(type: Int): Short = if (type == TYPE_HEARTBEAT) MARKER_HEARTBEAT else MARKER_DEFAULT
 
     /**
+     * Two generations of the same header.
+     *
+     * [NTO] is the iOS 5-6 packet the nto spec documents, used on the port-7100
+     * path: the type is a 16-bit field and offset 6 is `0x06`, or `0x1e` for a
+     * heartbeat.
+     *
+     * [IOS9] is what current senders put on the RTSP type-110 data channel, the
+     * same header the AirPlay 2 path sends to an Apple TV: the type is byte 4
+     * alone, byte 5 carries `0x10` on a keyframe, and offset 6 is `16 01` on a
+     * codec packet (UxPlay tells H.264 from HEVC by that byte), `1e 00` on a
+     * heartbeat and zero on video.
+     */
+    enum class HeaderStyle { NTO, IOS9 }
+
+    /** Bytes 6-7, as a little-endian short, that [style] gives [type]. */
+    fun markerFor(type: Int, style: HeaderStyle): Short = when (style) {
+        HeaderStyle.NTO -> markerFor(type)
+        HeaderStyle.IOS9 -> when (type) {
+            TYPE_CODEC_DATA -> MARKER_IOS9_CODEC
+            TYPE_HEARTBEAT -> MARKER_HEARTBEAT
+            else -> 0
+        }
+    }
+
+    /** `16 01` read little-endian: an H.264 codec packet in the [HeaderStyle.IOS9] header. */
+    const val MARKER_IOS9_CODEC: Short = 0x0116
+
+    /** Byte 5 of an [HeaderStyle.IOS9] video packet that starts with an IDR. */
+    const val FLAG_KEYFRAME = 0x10
+
+    /**
      * Builds one packet: a 128-byte header plus [payload].
      *
      * [ntpTimestamp] is the presentation time on the receiver's clock, in NTP
@@ -71,6 +102,8 @@ object LegacyStreamPackets {
         type: Int,
         ntpTimestamp: Long,
         payload: ByteArray = ByteArray(0),
+        style: HeaderStyle = HeaderStyle.NTO,
+        keyframe: Boolean = false,
     ): ByteArray {
         require(type == TYPE_VIDEO || type == TYPE_CODEC_DATA || type == TYPE_HEARTBEAT) {
             "unknown legacy stream packet type $type"
@@ -82,8 +115,9 @@ object LegacyStreamPackets {
         val out = ByteArray(HEADER_BYTES + payload.size)
         val header = ByteBuffer.wrap(out, 0, HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN)
         header.putInt(payload.size)
-        header.putShort(type.toShort())
-        header.putShort(markerFor(type))
+        header.put(type.toByte())
+        header.put(if (style == HeaderStyle.IOS9 && keyframe) FLAG_KEYFRAME.toByte() else 0)
+        header.putShort(markerFor(type, style))
         header.putLong(ntpTimestamp)
         // bytes 16..63 stay zero, and 64..127 are reserved padding.
         payload.copyInto(out, HEADER_BYTES)
@@ -103,6 +137,30 @@ object LegacyStreamPackets {
      */
     fun codecData(ntpTimestamp: Long, avcC: ByteArray): ByteArray =
         packet(TYPE_CODEC_DATA, ntpTimestamp, avcC)
+
+    /**
+     * A codec-data packet that also states the picture size.
+     *
+     * The iPad capture in the nto spec carries it as little-endian floats: the
+     * encoded size at 16, and the source and destination rectangles' sizes at 40
+     * and 56. A receiver that sizes its window from the header rather than from
+     * the SPS needs them; one that does not ignores bytes it never reads.
+     */
+    fun codecData(
+        ntpTimestamp: Long,
+        avcC: ByteArray,
+        width: Int,
+        height: Int,
+        style: HeaderStyle = HeaderStyle.NTO,
+    ): ByteArray {
+        val out = packet(TYPE_CODEC_DATA, ntpTimestamp, avcC, style)
+        val header = ByteBuffer.wrap(out, 0, HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+        for (offset in intArrayOf(16, 40, 56)) {
+            header.putFloat(offset, width.toFloat())
+            header.putFloat(offset + 4, height.toFloat())
+        }
+        return out
+    }
 
     /** A heartbeat: header only. */
     fun heartbeat(ntpTimestamp: Long): ByteArray = packet(TYPE_HEARTBEAT, ntpTimestamp)
@@ -133,12 +191,14 @@ object LegacyStreamPackets {
         if (bytes.size - offset < HEADER_BYTES) return null
         val header = ByteBuffer.wrap(bytes, offset, HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN)
         val size = header.getInt()
-        val type = header.getShort().toInt()
+        // Byte 5 is the keyframe flag in the iOS 9 header and zero in the nto one.
+        val type = header.get().toInt()
+        header.get()
         val marker = header.getShort()
         val timestamp = header.getLong()
 
         if (size < 0 || bytes.size - offset - HEADER_BYTES < size) return null
-        if (marker != markerFor(type)) {
+        if (marker != markerFor(type) && marker != markerFor(type, HeaderStyle.IOS9)) {
             throw IllegalArgumentException(
                 "packet marker 0x%02x does not match type %d (expected 0x%02x)"
                     .format(marker, type, markerFor(type))

@@ -21,12 +21,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import tw.avianjay.airplaydroid.discovery.DiscoveryRepository
 import tw.avianjay.airplaydroid.discovery.NsdDeviceDiscovery
+import tw.avianjay.airplaydroid.mirror.LegacyVideoKeyStore
 import tw.avianjay.airplaydroid.mirror.MirrorController
 import tw.avianjay.airplaydroid.mirror.PairingStore
 import tw.avianjay.airplaydroid.playback.PlaybackController
+import tw.avianjay.airplaydroid.protocol.AddressLookup
 import tw.avianjay.airplaydroid.ui.AirPlayDroidTheme
 import tw.avianjay.airplaydroid.ui.DevicePickerScreen
 
@@ -69,6 +73,8 @@ class MainActivity : ComponentActivity() {
                 val mirror by MirrorController.state.collectAsStateWithLifecycle()
                 val pairingRevision by PairingStore.revision.collectAsStateWithLifecycle()
                 val pairings = remember { PairingStore(applicationContext) }
+                val legacyKeys = remember { LegacyVideoKeyStore(applicationContext) }
+                val legacyKeyRevision by LegacyVideoKeyStore.revision.collectAsStateWithLifecycle()
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 // Re-read only when the set of devices or a saved pairing changes,
@@ -78,6 +84,9 @@ class MainActivity : ComponentActivity() {
                 val deviceKeys = discovery.devices.map { it.key }
                 val saved = remember(deviceKeys, pairingRevision) {
                     deviceKeys.mapNotNull { key -> pairings.summary(key)?.let { key to it } }.toMap()
+                }
+                val legacyKeySeeds = remember(deviceKeys, legacyKeyRevision) {
+                    deviceKeys.associateWith { legacyKeys.get(it) }
                 }
 
                 // Playback errors arrive asynchronously from the IO scope, so
@@ -132,6 +141,21 @@ class MainActivity : ComponentActivity() {
                     onRefused = { message ->
                         // Shown immediately: this is a local decision, no socket involved.
                         PlaybackController.reportRefusal(message)
+                    },
+                    legacyKeySeeds = legacyKeySeeds,
+                    onCycleLegacyKey = { legacyKeys.cycle(it.key) },
+                    onAddByAddress = { host, port ->
+                        lifecycleScope.launch {
+                            val found = runCatching {
+                                withContext(Dispatchers.IO) { AddressLookup.lookup(host, port) }
+                            }
+                            found.onSuccess { device ->
+                                DiscoveryRepository.addManual(device)
+                                snackbarHostState.showSnackbar(getString(R.string.add_address_added, device.displayName))
+                            }.onFailure { e ->
+                                snackbarHostState.showSnackbar(e.message ?: "No AirPlay receiver at $host:$port")
+                            }
+                        }
                     },
                 )
             }

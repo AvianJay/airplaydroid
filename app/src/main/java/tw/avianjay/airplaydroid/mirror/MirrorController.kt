@@ -59,8 +59,8 @@ object MirrorController {
      *
      *  - **HAP** receivers use the AirPlay 2 path ([MirrorSession]).
      *  - **Everything else that advertises screen mirroring** uses the legacy
-     *    path ([LegacyMirrorSessionFactory]): FairPlay SAP, then port-7100
-     *    `/stream`.
+     *    path ([LegacyMirrorSessionFactory]): FairPlay SAP, then RTSP type 110,
+     *    or port-7100 `/stream` if the receiver refuses that.
      *
      * A legacy receiver is therefore no longer refused. It used to be, with a
      * message saying this app could not mirror to it.
