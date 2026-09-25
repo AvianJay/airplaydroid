@@ -18,11 +18,21 @@ transcription of the following, adapted to this project's package and API:
 | `FairPlayBridge.kt` | `ports/kotlin/FairPlayBridge.kt` |
 | `FairPlayWhiteBoxTables.kt` | generated from `fairplayhash/wbaes_tables.go`, `fpbridge/wbaes_output_dec_gen.go`, `fpbridge/wbaes_consts.go`, `fpbridge/wbaes_xor_consts_gen.go` |
 | `FairPlayMessageCipher.kt` | constants from `internal/airplay/fairplay_message.go` |
+| `FairPlayPhase2.kt` | `fairplayhash/analytical.go`, `fpbridge/fp_exchange_native.go` |
+| `FairPlayPhase2Tables.kt` | generated from 13 files in `fairplayhash/` and `fpbridge/` (see the generator's header) |
+| `FairPlayPhase2Rounds.kt` | `fairplayhash/prologue.go`, `roundc_plain.go`, `roundc_unrolled.go`, `spn1_r8r19.go` |
+| `FairPlayPhase2Spn.kt` | `fairplayhash/spn1.go`, `spn1_trailing.go`, `tail_spn.go`, `spn1_ground.go`, `fpbridge/neon_state.go` |
+
+The Phase 2 tables are generated, not hand-copied, by
+`_research/gen_phase2_tables.py` — which decodes the upstream Go string-escape
+table literals, because hand-transcribing those corrupts them silently. That
+generator is the provenance record for the tables.
 
 Upstream projects:
 
 - **[objevovat/fairplay-sap-core-airplay2-sender-authentication-handshake](https://github.com/objevovat/fairplay-sap-core-airplay2-sender-authentication-handshake)**
-  — LGPL-3.0-or-later. The direct source of the transcribed files.
+  — LGPL-3.0-or-later (some files BlueOak-1.0.0). The direct source of the
+  transcribed files.
 - **[omarroth/doubletake](https://github.com/omarroth/doubletake)**
   — LGPL-3.0-or-later. The origin of the FairPlay round keys and of the algorithm
   that `fpsapcore`/`fpbridge` were derived from.
