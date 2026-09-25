@@ -22,8 +22,28 @@ android {
         versionName = "0.1.0"
     }
 
+    // Release signing comes from the environment, never from the repo: CI decodes
+    // the KEYSTORE_BASE64 secret to a file and sets KEYSTORE_FILE, KEYSTORE_ALIAS
+    // and KEYSTORE_PASSWORD (which serves as the key password too). Without them,
+    // e.g. on a local machine or a fork's pull request, the release build is
+    // simply left unsigned.
+    val releaseKeystore = providers.environmentVariable("KEYSTORE_FILE").orNull
+        ?.let(::file)
+        ?.takeIf { it.isFile }
+    if (releaseKeystore != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = providers.environmentVariable("KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("KEYSTORE_ALIAS").get()
+                keyPassword = providers.environmentVariable("KEYSTORE_PASSWORD").get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

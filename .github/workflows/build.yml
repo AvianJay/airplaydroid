@@ -1,0 +1,105 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes a running build of the same ref; the nightly release
+# only ever wants the latest main.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Empty on pull requests from forks, which then build unsigned.
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Test and lint
+        run: ./gradlew :protocol:test :app:lintDebug
+
+      - name: Decode the signing keystore
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build the release APK
+        env:
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: ./gradlew :app:assembleRelease
+
+      - name: Name the APK
+        run: |
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          if [ -n "${KEYSTORE_FILE:-}" ]; then
+            apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner
+            "$apksigner" verify --print-certs "$apk" | head -n 3
+          fi
+          mkdir -p dist
+          cp "$apk" dist/AirPlayDroid-nightly.apk
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AirPlayDroid-apk
+          path: dist/AirPlayDroid-nightly.apk
+          if-no-files-found: error
+
+  # One rolling pre-release, tag `nightly`: every push to main moves the tag and
+  # replaces the APK on it. No new release is ever created after the first.
+  nightly:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: AirPlayDroid-apk
+          path: dist
+
+      - name: Move the nightly tag to this commit
+        run: |
+          git tag -f nightly "$GITHUB_SHA"
+          git push -f origin refs/tags/nightly
+
+      - name: Update the nightly release
+        run: |
+          notes="Built from ${GITHUB_SHA::7} on $(date -u +'%Y-%m-%d %H:%M UTC').
+
+          $(git log -1 --format='%s' "$GITHUB_SHA")
+
+          Rebuilt on every push to main; this release is replaced, not added to."
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release edit nightly --title "Nightly" --notes "$notes" --prerelease
+            gh release upload nightly dist/AirPlayDroid-nightly.apk --clobber
+          else
+            gh release create nightly dist/AirPlayDroid-nightly.apk \
+              --title "Nightly" --notes "$notes" --prerelease --verify-tag
+          fi
