@@ -153,6 +153,17 @@ adb shell run-as tw.avianjay.airplaydroid cat files/mirror-log.txt
 JVM, streaming an H.264 file and a test tone. Use it to check a protocol change
 against real hardware without a phone.
 
+## Settings
+
+The picker's ⋮ menu holds **Add by address** and **Settings**.
+
+| Setting | Effect |
+|---|---|
+| **Client name** | The name the receiver lists and pairs this phone under. Defaults to `Build.MODEL`, and is sent both as `X-Apple-Client-Name` during pairing and as `name` in the control `SETUP`. One name for both, so a receiver cannot list one name and have paired another. Changing it does not touch existing pairings. |
+| **Keep the screen awake while mirroring** | On by default. `MediaProjection` keeps capturing while the screen sleeps, but the encoder's surface stops producing frames and the receiver freezes on the last one. Sets `FLAG_KEEP_SCREEN_ON` for the length of a session only. |
+| **Default legacy video key** | The app-wide fallback for the per-receiver `KeySeed`. A receiver with its own choice, set from its row menu, still wins. |
+| **Diagnostics** | Where the session log is, and the `run-as` command that reads it. |
+
 ## Video-URL handoff (AirPlay 1)
 
 **Play video URL…** in a device's ⋮ menu drives `POST /play`, `POST /rate`,

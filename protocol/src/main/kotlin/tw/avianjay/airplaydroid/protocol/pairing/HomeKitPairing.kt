@@ -35,7 +35,7 @@ import java.util.UUID
 class HomeKitPairing(
     private val connection: AirPlayConnection,
     private val clientId: String = UUID.randomUUID().toString().uppercase(),
-    private val clientName: String = "AirPlayDroid",
+    private val clientName: String = DEFAULT_CLIENT_NAME,
 ) {
 
     enum class Mode(val hkpHeader: String) {
@@ -319,6 +319,12 @@ class HomeKitPairing(
     companion object {
         /** The transient flow authenticates with this fixed value, not a user secret. */
         const val TRANSIENT_PASSWORD = "3939"
+
+        /**
+         * Used only when the caller names no client. The app always passes the
+         * name from its settings; the probes and tests in `:protocol` do not.
+         */
+        const val DEFAULT_CLIENT_NAME = "AirPlayDroid"
 
         /** Picks the mode the receiver's own flags demand. */
         fun modeFor(flags: StatusFlags): Mode =

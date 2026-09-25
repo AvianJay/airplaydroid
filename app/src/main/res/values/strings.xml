@@ -39,6 +39,23 @@
     <string name="action_mirror">Mirror screen</string>
     <string name="action_add_by_address">Add by address</string>
     <string name="action_add">Add</string>
+    <string name="action_settings">Settings</string>
+    <string name="picker_menu_description">More options</string>
+    <string name="action_back">Back</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_client_name_title">Client name</string>
+    <string name="settings_client_name_body">The name this phone shows in the receiver\'s AirPlay list, and the name it pairs under. Changing it does not affect existing pairings.</string>
+    <string name="settings_client_name_label">Name</string>
+    <string name="settings_client_name_reset">Use the device name (%1$s)</string>
+    <string name="settings_keep_awake_title">Keep the screen awake while mirroring</string>
+    <string name="settings_keep_awake_body">Android stops producing frames once the screen sleeps, which freezes the picture on the receiver. This holds the screen on for the length of a session.</string>
+    <string name="settings_legacy_key_title">Default legacy video key</string>
+    <string name="settings_legacy_key_body">For AirPlay 1 receivers that connect but show nothing. Applies to any receiver without its own choice, which is set from its row menu. Changing this applies from the next session.</string>
+    <string name="settings_diagnostics_title">Diagnostics</string>
+    <string name="settings_diagnostics_body">Session starts and end reasons are written here. Pull it with:\n\nadb shell run-as %1$s cat files/mirror-log.txt</string>
+    <string name="settings_diagnostics_unavailable">No log yet. It is created when the first session starts.</string>
+
     <string name="add_address_title">Add a receiver by address</string>
     <string name="add_address_body">For a receiver discovery cannot see: across a VPN, or this computer (10.0.2.2) from an emulator.</string>
     <string name="add_address_host_label">Host or IP address</string>

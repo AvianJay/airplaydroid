@@ -405,8 +405,12 @@ class MirrorSession private constructor(
          * password (`flags` bit 7), used as the SRP PIN. Persist the result and
          * pass it to [open] from then on.
          */
-        fun pair(endpoint: Endpoint, password: String): HomeKitPairing.Credentials =
-            SocketAirPlayConnection(endpoint).use { HomeKitPairing(it).pair(password) }
+        fun pair(
+            endpoint: Endpoint,
+            password: String,
+            clientName: String = HomeKitPairing.DEFAULT_CLIENT_NAME,
+        ): HomeKitPairing.Credentials =
+            SocketAirPlayConnection(endpoint).use { HomeKitPairing(it, clientName = clientName).pair(password) }
 
         /**
          * Pairs with a receiver in PIN mode (`flags` bit 9 or 3): asks it to show a
@@ -416,10 +420,14 @@ class MirrorSession private constructor(
          * Verified on an Apple TV 4K (tvOS 26.6) with Allow Access set but no
          * password, where every new device must enter the code once.
          */
-        fun pairWithPin(endpoint: Endpoint, awaitPin: () -> String?): HomeKitPairing.Credentials? =
+        fun pairWithPin(
+            endpoint: Endpoint,
+            awaitPin: () -> String?,
+            clientName: String = HomeKitPairing.DEFAULT_CLIENT_NAME,
+        ): HomeKitPairing.Credentials? =
             // Held open while the user types: pin-start and pair-setup must share it.
             SocketAirPlayConnection(endpoint, readTimeoutMs = 30_000).use { connection ->
-                val pairing = HomeKitPairing(connection)
+                val pairing = HomeKitPairing(connection, clientName = clientName)
                 pairing.startPin()
                 val pin = awaitPin() ?: return null
                 pairing.pair(pin)
@@ -436,6 +444,11 @@ class MirrorSession private constructor(
          *
          * [features] are the receiver's advertised feature bits (the `features`
          * TXT value); they pick the audio descriptor layout.
+         *
+         * [clientName] is the name the receiver records during pairing
+         * (`X-Apple-Client-Name`); it defaults to [senderName], which is the name
+         * the same receiver shows in its own device list. They are one setting in
+         * the app, so the receiver cannot list one name and have paired another.
          */
         fun open(
             endpoint: Endpoint,
@@ -444,8 +457,18 @@ class MirrorSession private constructor(
             senderName: String,
             withAudio: Boolean = false,
             features: ULong = 0uL,
+            clientName: String = senderName,
             listener: Listener,
-        ): MirrorSession = open(endpoint, Access.Paired(credentials), password, senderName, withAudio, features, listener)
+        ): MirrorSession = open(
+            endpoint = endpoint,
+            access = Access.Paired(credentials),
+            password = password,
+            senderName = senderName,
+            withAudio = withAudio,
+            features = features,
+            clientName = clientName,
+            listener = listener,
+        )
 
         /**
          * As above, authenticating per [access]. A transient session throws
@@ -459,6 +482,7 @@ class MirrorSession private constructor(
             senderName: String,
             withAudio: Boolean = false,
             features: ULong = 0uL,
+            clientName: String = senderName,
             listener: Listener,
         ): MirrorSession {
             val control = SocketAirPlayConnection(endpoint)
@@ -468,11 +492,12 @@ class MirrorSession private constructor(
             try {
                 val pairing = when (access) {
                     is Access.Paired ->
-                        HomeKitPairing(control, clientId = access.credentials.clientId).verify(access.credentials)
+                        HomeKitPairing(control, clientId = access.credentials.clientId, clientName = clientName)
+                            .verify(access.credentials)
                     // M1-M4 on this very connection: the receiver switches it to
                     // encrypted framing right after its plaintext M4.
                     is Access.Transient -> HomeKitPairing.Session(
-                        HomeKitPairing(control, clientId = access.clientId)
+                        HomeKitPairing(control, clientId = access.clientId, clientName = clientName)
                             .pairSetup(HomeKitPairing.Mode.TRANSIENT, HomeKitPairing.TRANSIENT_PASSWORD)
                     )
                 }

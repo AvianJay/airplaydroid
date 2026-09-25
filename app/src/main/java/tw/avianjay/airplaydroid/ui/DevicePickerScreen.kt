@@ -102,6 +102,7 @@ fun DevicePickerScreen(
     onCancelPin: () -> Unit,
     onRefused: (String) -> Unit,
     onAddByAddress: (host: String, port: Int) -> Unit,
+    onOpenSettings: () -> Unit,
     legacyKeySeeds: Map<String, KeySeed>,
     onCycleLegacyKey: (AirPlayDevice) -> Unit,
     modifier: Modifier = Modifier,
@@ -110,6 +111,7 @@ fun DevicePickerScreen(
     var addingAddress by rememberSaveable { mutableStateOf(false) }
     var playUrlFor by remember { mutableStateOf<AirPlayDevice?>(null) }
     var forgetFor by remember { mutableStateOf<AirPlayDevice?>(null) }
+    var menuExpanded by remember { mutableStateOf(false) }
     // Resolved here because the row's click lambda cannot call stringResource.
     val alreadyMirroring = stringResource(R.string.mirror_already_active, mirror.device?.displayName.orEmpty())
 
@@ -119,8 +121,36 @@ fun DevicePickerScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.picker_title)) },
                 actions = {
-                    TextButton(onClick = { addingAddress = true }) {
-                        Text(stringResource(R.string.action_add_by_address))
+                    // One overflow menu rather than a labelled button per action:
+                    // "Add by address" is a rare, one-off setup step, and the
+                    // title bar has to hold the app name and its actions on a
+                    // narrow phone.
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_more_vert),
+                                contentDescription = stringResource(R.string.picker_menu_description),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_add_by_address)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    addingAddress = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_settings)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenSettings()
+                                },
+                            )
+                        }
                     }
                 },
             )

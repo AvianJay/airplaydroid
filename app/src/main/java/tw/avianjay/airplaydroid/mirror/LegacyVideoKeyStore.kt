@@ -19,22 +19,34 @@ import java.util.UUID
  * right for every receiver measured so far, but it is a heuristic; when a
  * receiver connects and shows nothing, the user switches it here from the row's
  * menu, and the choice sticks for that receiver.
+ *
+ * A receiver with no choice of its own falls back to [default], which is the
+ * app-wide setting: that is the one to change when *every* legacy receiver
+ * misbehaves, and the per-receiver override stays for the one that differs.
  */
 class LegacyVideoKeyStore(context: Context) {
 
     private val prefs = context.getSharedPreferences("legacy_video_key", Context.MODE_PRIVATE)
     private val idFile = File(context.noBackupFilesDir, "legacy-device-id")
 
-    fun get(deviceKey: String): KeySeed =
-        prefs.getString(deviceKey, null)?.let { runCatching { KeySeed.valueOf(it) }.getOrNull() } ?: KeySeed.AUTO
+    /** This receiver's own choice, or [default] when it has none. */
+    fun get(deviceKey: String, default: KeySeed = KeySeed.AUTO): KeySeed =
+        prefs.getString(deviceKey, null)?.let { runCatching { KeySeed.valueOf(it) }.getOrNull() } ?: default
 
-    /** Automatic -> raw -> mixed -> automatic. Returns the new choice. */
-    fun cycle(deviceKey: String): KeySeed {
-        val next = when (get(deviceKey)) {
+    /**
+     * Automatic -> raw -> mixed -> automatic. Returns the new choice.
+     *
+     * [default] is what AUTO resolves to, so the cycle starts from what the user
+     * actually sees rather than from a fixed AUTO.
+     */
+    fun cycle(deviceKey: String, default: KeySeed = KeySeed.AUTO): KeySeed {
+        val next = when (get(deviceKey, default)) {
             KeySeed.AUTO -> KeySeed.RAW
             KeySeed.RAW -> KeySeed.MIXED
             KeySeed.MIXED -> KeySeed.AUTO
         }
+        // Storing AUTO as an absent key lets a later change to the app-wide
+        // default reach this receiver again.
         prefs.edit { if (next == KeySeed.AUTO) remove(deviceKey) else putString(deviceKey, next.name) }
         _revision.update { it + 1 }
         return next

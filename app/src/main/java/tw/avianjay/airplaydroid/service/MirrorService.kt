@@ -31,6 +31,7 @@ import tw.avianjay.airplaydroid.protocol.mirror.LegacyMirrorSessionFactory
 import tw.avianjay.airplaydroid.protocol.mirror.MirrorSession
 import tw.avianjay.airplaydroid.protocol.mirror.ReceiverDisplay
 import tw.avianjay.airplaydroid.protocol.pairing.HomeKitPairing
+import tw.avianjay.airplaydroid.settings.SettingsStore
 import java.util.concurrent.Executors
 
 /**
@@ -171,7 +172,7 @@ class MirrorService : Service() {
                 MirrorController.setPhase(Phase.Pairing)
                 // pair-setup uses the password as its SRP secret, so a completed
                 // pairing has proven the password too; saving both now is safe.
-                PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
+                PairingStore.Entry(MirrorSession.pair(endpoint, password, appSettings.clientName()), password)
                     .also { store.save(device.key, it) }
             }
 
@@ -185,7 +186,7 @@ class MirrorService : Service() {
                 store.forget(device.key)
                 if (password == null) throw e
                 MirrorController.setPhase(Phase.Pairing)
-                entry = PairingStore.Entry(MirrorSession.pair(endpoint, password), password)
+                entry = PairingStore.Entry(MirrorSession.pair(endpoint, password, appSettings.clientName()), password)
                 store.save(device.key, entry)
                 MirrorController.setPhase(Phase.Connecting)
                 open(device, entry.credentials, password)
@@ -271,12 +272,12 @@ class MirrorService : Service() {
                 host = endpoint.host,
                 rtspPort = endpoint.port,
                 password = typedPassword?.takeIf { it.isNotEmpty() },
-                senderName = Build.MODEL,
+                senderName = appSettings.clientName(),
                 onEnded = { reason ->
                     finish("The connection to ${device.displayName} ended: $reason", why = "legacy session: $reason")
                 },
                 trace = { MirrorLog.write("legacy: $it") },
-                keySeed = keys.get(device.key),
+                keySeed = keys.get(device.key, appSettings.state.value.defaultLegacyKeySeed),
                 deviceId = keys.deviceId(),
             )
 
@@ -382,10 +383,10 @@ class MirrorService : Service() {
         try {
             MirrorController.setPhase(Phase.Connecting)
             val opened = MirrorSession.open(
-                requireNotNull(device.videoEndpoint),
-                MirrorSession.Access.Transient(transientClientId()),
+                endpoint = requireNotNull(device.videoEndpoint),
+                access = MirrorSession.Access.Transient(transientClientId()),
                 password = null,
-                senderName = Build.MODEL,
+                senderName = appSettings.clientName(),
                 withAudio = synchronized(lock) { audio != null },
                 features = device.airPlayTxt?.features?.raw ?: 0uL,
             ) { reason -> finish("The connection to ${device.displayName} ended: $reason", why = "session: $reason") }
@@ -434,9 +435,11 @@ class MirrorService : Service() {
         val store = PairingStore(this)
         try {
             MirrorController.setPhase(Phase.Pairing)
-            val credentials = MirrorSession.pairWithPin(requireNotNull(device.videoEndpoint)) {
-                MirrorController.awaitPin(PIN_TIMEOUT_MS)
-            } ?: return finish(error = null, why = "PIN entry cancelled or timed out")
+            val credentials = MirrorSession.pairWithPin(
+                endpoint = requireNotNull(device.videoEndpoint),
+                awaitPin = { MirrorController.awaitPin(PIN_TIMEOUT_MS) },
+                clientName = appSettings.clientName(),
+            ) ?: return finish(error = null, why = "PIN entry cancelled or timed out")
             store.save(device.key, PairingStore.Entry(credentials, null))
             MirrorLog.write("paired with ${device.displayName} using its on-screen code")
             if (synchronized(lock) { stopping }) return
@@ -472,10 +475,22 @@ class MirrorService : Service() {
         credentials: HomeKitPairing.Credentials,
         password: String?,
     ) = MirrorSession.open(
-        requireNotNull(device.videoEndpoint), credentials, password, Build.MODEL,
+        endpoint = requireNotNull(device.videoEndpoint),
+        credentials = credentials,
+        password = password,
+        // The receiver shows this name in its list; pairing records the same one,
+        // so a receiver cannot know this phone by two different names.
+        senderName = appSettings.clientName(),
         withAudio = audio != null,
         features = device.airPlayTxt?.features?.raw ?: 0uL,
     ) { reason -> finish("The connection to ${device.displayName} ended: $reason", why = "session: $reason") }
+
+    /**
+     * The app-wide settings. The service runs one session, so one read at
+     * construction is enough; the notification and every handshake in the
+     * session see the same values.
+     */
+    private val appSettings by lazy { SettingsStore(this) }
 
     /**
      * Ends the session. Idempotent and safe from any thread. [error] is shown to
