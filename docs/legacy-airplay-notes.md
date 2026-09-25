@@ -277,6 +277,14 @@ Both produce output of the right *shape*. Only an oracle spanning the whole chai
 - a full-chain vector, or a receiver - can see them. **"N/N vectors pass" is a
 statement about what those vectors cover, and nothing more.**
 
+Both now have offline guards, so neither can regress silently:
+
+- `FairPlayFullChainGoldenTest` (142 vectors) covers the response end to end.
+- `MockLegacyReceiverBodyPolicyTest` covers the body: the mock's
+  `ACCEPT_DECRYPTABLE_BODY` policy decrypts the m3 body and requires a well-formed
+  local SAP, and the test asserts a hand-built **raw** body is refused. That is the
+  regression guard for bug 2, which nothing offline caught at the time.
+
 ### A flakiness bug worth recording
 
 The end-to-end tests were flaky (3 of 5 runs failed) and the first fix - waiting

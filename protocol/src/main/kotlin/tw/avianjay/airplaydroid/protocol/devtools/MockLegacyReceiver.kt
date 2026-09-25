@@ -1,5 +1,6 @@
 package tw.avianjay.airplaydroid.protocol.devtools
 
+import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayMessageCipher
 import tw.avianjay.airplaydroid.protocol.fairplay.FairPlayRecords
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -145,6 +146,9 @@ object MockLegacyReceiver {
                 SessionPolicy.ACCEPT_FRESH_SESSION ->
                     "FairPlay: returns the captured 142-byte m2; an m3 with a FRESH local SAP is accepted " +
                         "(m4), a byte-identical replay is refused."
+                SessionPolicy.ACCEPT_DECRYPTABLE_BODY ->
+                    "FairPlay: returns the captured 142-byte m2; an m3 whose body DECRYPTS to a " +
+                        "well-formed local SAP is accepted (m4). Catches an unencrypted m3 body."
             }
         )
         // Shared across connections on purpose: a frozen-replay sender emits the
@@ -187,6 +191,23 @@ object MockLegacyReceiver {
          * previously seen SAPs -- no key schedule.
          */
         ACCEPT_FRESH_SESSION,
+
+        /**
+         * Like [ACCEPT_FRESH_SESSION], but also require the m3 body to be a
+         * correctly **encrypted** local SAP.
+         *
+         * A real receiver decrypts bytes 16..144 and folds the result into the
+         * response it checks. A sender that writes the local SAP in the clear
+         * produces a frame with correct framing, a correct label and a correct
+         * response -- and which every receiver rejects, because the body it
+         * decrypts is not the SAP the response was computed over.
+         *
+         * That was a real bug in this project, and nothing offline caught it. This
+         * policy is the regression guard: it decrypts the body with
+         * [FairPlayMessageCipher] and requires the plaintext to be a well-formed
+         * local SAP (`00 01 ...`), which a raw body is not.
+         */
+        ACCEPT_DECRYPTABLE_BODY,
     }
 
     /**
@@ -453,6 +474,18 @@ object MockLegacyReceiver {
         }
     }
 
+    /**
+     * Decrypts an m3 body the way a receiver does, or null if it is not
+     * decryptable.
+     *
+     * A receiver treats the 128 bytes at m3[16:144] as the mode's message cipher
+     * output and decrypts them to recover the sender's local SAP. A sender that
+     * writes the SAP in the clear produces a body that decrypts to noise, which
+     * is why such an m3 is rejected.
+     */
+    private fun decryptM3Body(mode: FairPlayRecords.Mode, body: ByteArray): ByteArray? =
+        runCatching { FairPlayMessageCipher.decryptBody(mode, body) }.getOrNull()
+
     private fun respondFairPlay(
         request: Request,
         output: OutputStream,
@@ -484,6 +517,16 @@ object MockLegacyReceiver {
                         // every session after its first, which is the behaviour
                         // real receivers report as `466 Key Management Error`.
                         m3 != null && seenLocalSaps.add(m3.body.toHex())
+                    }
+
+                    SessionPolicy.ACCEPT_DECRYPTABLE_BODY -> {
+                        // A real receiver decrypts the body and uses the plaintext
+                        // as the SAP. Require that to be possible and well-formed.
+                        val sap = m3?.let { decryptM3Body(it.mode, it.body) }
+                        sap != null &&
+                            sap[0] == 0x00.toByte() &&
+                            sap[1] == 0x01.toByte() &&
+                            seenLocalSaps.add(sap.toHex())
                     }
                 }
                 if (accepted) {
