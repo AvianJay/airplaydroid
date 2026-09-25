@@ -234,7 +234,14 @@ Both are pinned by tests (`LegacyVideoStreamTest`).
 - **End-to-end against the mock receiver** (`LegacySessionEndToEndTest`): the real
   `LegacyMirrorSessionFactory.open` runs over real sockets - FairPlay SAP,
   `/stream.xml`, the key wrap, `POST /stream` - and the frames are walked back out
-  as a receiver would.
+  as a receiver would. These use a stub responder on purpose, so a crypto
+  regression cannot be mistaken for a session one.
+- **Whole path with the real crypto** (`LegacyRealResponderSessionTest`): the same
+  session driven by `FairPlayResponderImpl` against the mock's
+  `ACCEPT_DECRYPTABLE_BODY` policy, which decrypts the m3 body and refuses
+  anything that is not a well-formed local SAP. It also checks that two
+  consecutive sessions present *distinct* local SAPs. This was impossible before
+  Phase 2 landed, which is why the m3-body bug survived as long as it did.
 - The video cipher is pinned against a plain `AES/CTR/NoPadding` reference, and
   the continuous-keystream property is asserted across packet boundaries.
 - The transport rule is pinned against **real** feature words observed on the
