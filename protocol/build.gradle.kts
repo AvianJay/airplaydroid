@@ -39,7 +39,7 @@ tasks.withType<Test>().configureEach {
     //
     // Only forwarded when actually set, so the default run stays offline and
     // hardware-free.
-    listOf("airplay.host", "airplay.port", "airplay.capture").forEach { name ->
+    listOf("airplay.host", "airplay.port", "airplay.capture", "airplay.probe").forEach { name ->
         System.getProperty(name)?.let { systemProperty(name, it) }
     }
 }

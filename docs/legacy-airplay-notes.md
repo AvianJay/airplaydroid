@@ -243,11 +243,24 @@ Both are pinned by tests (`LegacyVideoStreamTest`).
 
 ### LonelyScreen cannot test the mirroring session
 
-LonelyScreen accepts the FairPlay handshake but exposes **only port 7000**: no
-7100, and `GET /stream.xml` there gets no reply. So it is a valid FairPlay target
-and *not* a valid legacy-mirroring target. Testing the session needs a receiver
-that actually serves the port-7100 endpoint - AirScreen or the AS-2112123AG
-dongle, when either is reachable.
+LonelyScreen accepts the FairPlay handshake but is **not** a usable legacy
+mirroring target. Measured (`FairPlaySessionProbeTest`):
+
+| Probe | Result |
+|---|---|
+| `POST /fp-setup` m1 -> m2 | 142-byte m2, fresh challenge each run |
+| m3 with our computed response | **accepted** (valid m4) |
+| `OPTIONS` on the same connection afterwards | **times out** |
+| port 7100 | closed |
+| `GET /stream.xml` | no reply |
+
+So after the m4 it neither keeps the control connection open nor serves the
+port-7100 endpoint. It validates FairPlay and nothing else — which makes it an
+excellent *FairPlay* oracle (that is what the 5/5 acceptance result rests on) and
+useless for the mirroring session.
+
+Testing the session needs a receiver that serves port 7100: **AirScreen**
+(`192.168.31.141:5000` when its phone is attached) or the **AS-2112123AG dongle**.
 
 ### Two bugs hardware found that the test suite did not
 
