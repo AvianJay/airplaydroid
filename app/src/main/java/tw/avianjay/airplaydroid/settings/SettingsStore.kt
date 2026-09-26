@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import tw.avianjay.airplaydroid.protocol.mirror.LegacyRtspMirrorSession.KeySeed
+import tw.avianjay.airplaydroid.protocol.update.UpdateChannel
 
 /**
  * The user-facing settings, as one immutable value.
@@ -32,6 +33,13 @@ data class Settings(
      * per-receiver override, set from the row's menu, still wins.
      */
     val defaultLegacyKeySeed: KeySeed,
+    /**
+     * Which releases the in-app updater may offer. Defaults to [UpdateChannel.OFF]:
+     * an app that starts phoning home the moment it is installed is a surprise,
+     * and on this project every build before the first tagged release would
+     * otherwise check a manifest that does not exist yet.
+     */
+    val updateChannel: UpdateChannel,
 )
 
 /**
@@ -73,12 +81,24 @@ class SettingsStore(context: Context) {
         _state.value = _state.value.copy(defaultLegacyKeySeed = seed)
     }
 
+    fun setUpdateChannel(channel: UpdateChannel) {
+        if (channel == _state.value.updateChannel) return
+        // OFF is the default, so an explicit choice of it is stored as absence.
+        prefs.edit {
+            if (channel == UpdateChannel.OFF) remove(KEY_UPDATE_CHANNEL)
+            else putString(KEY_UPDATE_CHANNEL, channel.name)
+        }
+        _state.value = _state.value.copy(updateChannel = channel)
+    }
+
     /** The client name alone, for callers that run off the main thread. */
     fun clientName(): String = _state.value.clientName
 
     fun keepScreenAwake(): Boolean = _state.value.keepScreenAwake
 
     fun defaultLegacyKeySeed(): KeySeed = _state.value.defaultLegacyKeySeed
+
+    fun updateChannel(): UpdateChannel = _state.value.updateChannel
 
     private fun read(): Settings = Settings(
         clientName = prefs.getString(KEY_CLIENT_NAME, null)?.takeIf { it.isNotBlank() }
@@ -87,6 +107,9 @@ class SettingsStore(context: Context) {
         defaultLegacyKeySeed = prefs.getString(KEY_LEGACY_KEY, null)
             ?.let { runCatching { KeySeed.valueOf(it) }.getOrNull() }
             ?: KeySeed.AUTO,
+        updateChannel = prefs.getString(KEY_UPDATE_CHANNEL, null)
+            ?.let { runCatching { UpdateChannel.valueOf(it) }.getOrNull() }
+            ?: UpdateChannel.OFF,
     )
 
     companion object {
@@ -94,6 +117,7 @@ class SettingsStore(context: Context) {
         private const val KEY_CLIENT_NAME = "client_name"
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_LEGACY_KEY = "default_legacy_key_seed"
+        private const val KEY_UPDATE_CHANNEL = "update_channel"
 
         /** Long enough for any real device name, short enough for a SETUP body. */
         const val MAX_NAME_LENGTH = 64

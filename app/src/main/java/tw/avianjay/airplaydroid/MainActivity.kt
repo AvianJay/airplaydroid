@@ -43,6 +43,7 @@ import tw.avianjay.airplaydroid.settings.SettingsStore
 import tw.avianjay.airplaydroid.ui.AirPlayDroidTheme
 import tw.avianjay.airplaydroid.ui.DevicePickerScreen
 import tw.avianjay.airplaydroid.ui.SettingsScreen
+import tw.avianjay.airplaydroid.update.Updater
 
 class MainActivity : ComponentActivity() {
 
@@ -87,8 +88,19 @@ class MainActivity : ComponentActivity() {
                 val legacyKeyRevision by LegacyVideoKeyStore.revision.collectAsStateWithLifecycle()
                 val settingsStore = remember { SettingsStore(applicationContext) }
                 val settings by settingsStore.state.collectAsStateWithLifecycle()
+                val updateState by Updater.state.collectAsStateWithLifecycle()
                 val snackbarHostState = remember { SnackbarHostState() }
                 var showSettings by rememberSaveable { mutableStateOf(false) }
+
+                // Records the installed versionCode once, and re-checks whenever
+                // the channel changes -- so switching to nightly immediately
+                // offers the nightly instead of waiting for the next visit.
+                LaunchedEffect(settings.updateChannel) {
+                    Updater.recordInstalled(applicationContext)
+                    if (!settings.updateChannel.isOff) {
+                        Updater.check(applicationContext, settings.updateChannel)
+                    }
+                }
 
                 // Re-read only when the set of devices or a saved pairing changes,
                 // never per recomposition: each lookup is a small file read on
@@ -136,6 +148,14 @@ class MainActivity : ComponentActivity() {
                         onClientName = settingsStore::setClientName,
                         onKeepScreenAwake = settingsStore::setKeepScreenAwake,
                         onDefaultLegacyKeySeed = settingsStore::setDefaultLegacyKeySeed,
+                        onUpdateChannel = settingsStore::setUpdateChannel,
+                        updateState = updateState,
+                        onCheckForUpdates = {
+                            Updater.check(applicationContext, settings.updateChannel)
+                        },
+                        onInstallUpdate = {
+                            updateState.release?.let { Updater.downloadAndInstall(this, it) }
+                        },
                         onBack = { showSettings = false },
                     )
                 } else {

@@ -23,6 +23,12 @@ jobs:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The version code is derived from the commit count, so the full
+          # history must be present. A shallow clone would report a count of 1
+          # and hand every nightly the same versionCode, which makes the updater
+          # offer an "update" that Android then refuses to install.
+          fetch-depth: 0
 
       - uses: actions/setup-java@v6
         with:
@@ -34,6 +40,18 @@ jobs:
       - name: Test and lint
         run: ./gradlew :protocol:test :app:lintDebug
 
+      # Both channels share the git commit count as their versionCode, so a
+      # build from a tag always outranks every earlier nightly and vice versa.
+      # See app/build.gradle.kts for why this must be one sequence.
+      - name: Compute the version
+        id: version
+        run: |
+          base=$(grep -E '^app\.version\.base=' gradle.properties | cut -d= -f2)
+          commits=$(git rev-list --count HEAD)
+          short=$(git rev-parse --short HEAD)
+          echo "name=${base}-nightly.${commits}.${short}" >> "$GITHUB_OUTPUT"
+          echo "code=${commits}" >> "$GITHUB_OUTPUT"
+
       - name: Decode the signing keystore
         if: env.KEYSTORE_BASE64 != ''
         run: |
@@ -44,6 +62,8 @@ jobs:
         env:
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          APP_VERSION_NAME: ${{ steps.version.outputs.name }}
+          APP_VERSION_CODE: ${{ steps.version.outputs.code }}
         run: ./gradlew :app:assembleRelease
 
       - name: Name the APK
@@ -56,6 +76,35 @@ jobs:
           mkdir -p dist
           cp "$apk" dist/AirPlayDroid-nightly.apk
 
+      # The manifest the in-app updater reads. Written here, from the same
+      # variables the APK was built with, so it cannot describe a build that was
+      # never produced. `sha256sum` output is "hash  path"; only the hash is kept.
+      - name: Write the update manifest
+        run: |
+          sha=$(sha256sum dist/AirPlayDroid-nightly.apk | cut -d' ' -f1)
+          size=$(stat -c%s dist/AirPlayDroid-nightly.apk)
+          subject=$(git log -1 --format='%s' | sed 's/\\/\\\\/g; s/"/\\"/g')
+          built=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          cat > dist/update.json <<EOF
+          {
+            "schema": 1,
+            "releases": [
+              {
+                "versionName": "${{ steps.version.outputs.name }}",
+                "versionCode": ${{ steps.version.outputs.code }},
+                "prerelease": true,
+                "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/AirPlayDroid-nightly.apk",
+                "sha256": "${sha}",
+                "sizeBytes": ${size},
+                "notes": "${subject}",
+                "publishedAt": "${built}"
+              }
+            ]
+          }
+          EOF
+          cat dist/update.json
+
       - name: Remove the keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/release.keystore"
@@ -63,7 +112,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: AirPlayDroid-apk
-          path: dist/AirPlayDroid-nightly.apk
+          path: |
+            dist/AirPlayDroid-nightly.apk
+            dist/update.json
           if-no-files-found: error
 
   # One rolling pre-release, tag `nightly`: every push to main moves the tag and
@@ -78,6 +129,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with:
@@ -98,8 +151,8 @@ jobs:
           Rebuilt on every push to main; this release is replaced, not added to."
           if gh release view nightly > /dev/null 2>&1; then
             gh release edit nightly --title "Nightly" --notes "$notes" --prerelease
-            gh release upload nightly dist/AirPlayDroid-nightly.apk --clobber
+            gh release upload nightly dist/AirPlayDroid-nightly.apk dist/update.json --clobber
           else
-            gh release create nightly dist/AirPlayDroid-nightly.apk \
+            gh release create nightly dist/AirPlayDroid-nightly.apk dist/update.json \
               --title "Nightly" --notes "$notes" --prerelease --verify-tag
           fi

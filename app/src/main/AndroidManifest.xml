@@ -25,6 +25,13 @@
          or mirroring. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- The in-app updater. Needed to hand a downloaded APK to the system
+         installer; the app never installs anything itself. From Android 8 this is
+         a per-app "install unknown apps" grant the user gives in Settings, not a
+         runtime dialog, so the updater checks it and links there when it is
+         missing rather than failing silently. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Declared required=false so the Play Console does not implicitly filter the
          app to Wi-Fi-capable devices only. -->
     <uses-feature
@@ -59,6 +66,22 @@
             android:name=".service.MirrorService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Serves the downloaded APK to the system installer. A file:// URI
+             would throw FileUriExposedException, and the installer cannot read
+             this app's cache directory directly, so the download is exposed
+             through this provider with a read-only grant on the intent.
+             Not exported and not grantable by default: the only grant is the
+             one ApkInstaller attaches to its own intent. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

@@ -1,0 +1,164 @@
+name: Release
+
+# Pushing a version tag (v0.2.0) builds a signed APK and opens a DRAFT release.
+# Nothing is published until a human presses "Publish release" on GitHub, which
+# is what makes the in-app updater's stable channel safe: it reads
+# `releases/latest`, and GitHub does not count a draft as the latest release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.2.0). Must already exist."
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The versionCode is the commit count, so the whole history is needed.
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Test and lint
+        run: ./gradlew :protocol:test :app:lintDebug
+
+      # The tag is the single source of truth for a release's name and code, so
+      # the workflow never has to be kept in step with gradle.properties.
+      #
+      # The code is the commit count at the tag -- the SAME sequence the nightly
+      # workflow uses. That is deliberate: it is what lets a user move between
+      # channels in either direction without ever being offered a downgrade,
+      # which Android would refuse to install.
+      - name: Compute the version
+        id: version
+        run: |
+          # `github.ref_name` is the tag on a tag push, but the branch on a
+          # workflow_dispatch, so the input wins when it is set.
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          if [ -z "$tag" ]; then
+            echo "::error::no tag to build; pass one or push a v* tag."
+            exit 1
+          fi
+          # v1.2.3 -> 1.2.3; a tag without the prefix is taken as-is.
+          name="${tag#v}"
+          commits=$(git rev-list --count HEAD)
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "code=${commits}" >> "$GITHUB_OUTPUT"
+
+      - name: Decode the signing keystore
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      # A release that is not signed cannot be installed over one that is, and
+      # the updater would offer an update that always fails. Fail loudly here
+      # rather than publishing an unusable draft.
+      - name: Require a signing key
+        if: env.KEYSTORE_BASE64 == ''
+        run: |
+          echo "::error::KEYSTORE_BASE64 is not set, so the APK would be unsigned and uninstallable over an existing build."
+          exit 1
+
+      - name: Build the release APK
+        env:
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          APP_VERSION_NAME: ${{ steps.version.outputs.name }}
+          APP_VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: ./gradlew :app:assembleRelease
+
+      - name: Name the APK
+        run: |
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner
+          "$apksigner" verify --print-certs "$apk" | head -n 3
+          mkdir -p dist
+          cp "$apk" "dist/AirPlayDroid-${{ steps.version.outputs.name }}.apk"
+
+      # The manifest the in-app updater's stable channel reads. `prerelease` is
+      # false, which is what makes it eligible there.
+      - name: Write the update manifest
+        run: |
+          apk="dist/AirPlayDroid-${{ steps.version.outputs.name }}.apk"
+          sha=$(sha256sum "$apk" | cut -d' ' -f1)
+          size=$(stat -c%s "$apk")
+          built=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          # The tag's own annotation, or the commit subject when it is lightweight.
+          subject=$(git log -1 --format='%s' | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+          cat > dist/update.json <<EOF
+          {
+            "schema": 1,
+            "releases": [
+              {
+                "versionName": "${{ steps.version.outputs.name }}",
+                "versionCode": ${{ steps.version.outputs.code }},
+                "prerelease": false,
+                "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.version.outputs.tag }}/AirPlayDroid-${{ steps.version.outputs.name }}.apk",
+                "sha256": "${sha}",
+                "sizeBytes": ${size},
+                "notes": "${subject}",
+                "publishedAt": "${built}"
+              }
+            ]
+          }
+          EOF
+          cat dist/update.json
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AirPlayDroid-release
+          path: |
+            dist/*.apk
+            dist/update.json
+          if-no-files-found: error
+
+      # A DRAFT, not a published release. GitHub's `releases/latest` ignores
+      # drafts, so the stable channel keeps serving the previous release until a
+      # human publishes this one -- which is the point of the draft step.
+      - name: Open a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          name="${{ steps.version.outputs.name }}"
+          apk="dist/AirPlayDroid-${name}.apk"
+
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "::error::a release for $tag already exists."
+            exit 1
+          fi
+
+          gh release create "$tag" "$apk" dist/update.json \
+            --draft \
+            --title "AirPlayDroid $name" \
+            --verify-tag \
+            --notes "$(git log -1 --format='%s')"

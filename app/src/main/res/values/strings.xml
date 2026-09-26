@@ -56,6 +56,33 @@
     <string name="settings_diagnostics_body">Session starts and end reasons are written here. Pull it with:\n\nadb shell run-as %1$s cat files/mirror-log.txt</string>
     <string name="settings_diagnostics_unavailable">No log yet. It is created when the first session starts.</string>
 
+    <string name="settings_updates_title">App updates</string>
+    <string name="settings_updates_body">Checks this project\'s GitHub releases for a newer build, downloads the APK and hands it to Android\'s installer. Nothing is installed without your confirmation.</string>
+    <string name="settings_update_channel_off">Off</string>
+    <string name="settings_update_channel_off_body">Never check for updates.</string>
+    <string name="settings_update_channel_stable">Stable releases</string>
+    <string name="settings_update_channel_stable_body">Tagged releases only.</string>
+    <string name="settings_update_channel_nightly">Nightly builds</string>
+    <string name="settings_update_channel_nightly_body">Every build from main, including pre-releases.</string>
+    <string name="settings_update_installed">Installed: %1$s (build %2$d)</string>
+    <string name="settings_update_installed_unknown">Installed build %1$d</string>
+    <string name="settings_update_check">Check now</string>
+    <string name="settings_update_checking">Checking…</string>
+    <string name="settings_update_available">Version %1$s is available</string>
+    <string name="settings_update_available_with_size">Version %1$s is available · %2$s</string>
+    <string name="settings_update_up_to_date">Up to date.</string>
+    <string name="settings_update_channel_off_note">Updates are off. Choose a channel to check for new builds.</string>
+    <string name="settings_update_no_stable">No stable release has been published yet. Nightly builds are available on the nightly channel.</string>
+    <string name="settings_update_nothing_published">Nothing has been published on this channel yet.</string>
+    <string name="settings_update_not_installable">A newer build is published, but it does not carry a version Android can install over this one.</string>
+    <string name="settings_update_download">Download and install</string>
+    <string name="settings_update_downloading">Downloading… %1$d%%</string>
+    <string name="settings_update_downloading_indeterminate">Downloading…</string>
+    <string name="settings_update_ready">Downloaded. Android\'s installer should be open.</string>
+    <string name="settings_update_allow_install">Allow installs, then retry</string>
+    <string name="settings_update_allow_install_body">Android needs your permission before this app can open its installer. The switch is on the page that just opened.</string>
+    <string name="settings_update_open_release">Open the release page</string>
+
     <string name="add_address_title">Add a receiver by address</string>
     <string name="add_address_body">For a receiver discovery cannot see: across a VPN, or this computer (10.0.2.2) from an emulator.</string>
     <string name="add_address_host_label">Host or IP address</string>

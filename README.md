@@ -162,7 +162,71 @@ The picker's ⋮ menu holds **Add by address** and **Settings**.
 | **Client name** | The name the receiver lists and pairs this phone under. Defaults to `Build.MODEL`, and is sent both as `X-Apple-Client-Name` during pairing and as `name` in the control `SETUP`. One name for both, so a receiver cannot list one name and have paired another. Changing it does not touch existing pairings. |
 | **Keep the screen awake while mirroring** | On by default. `MediaProjection` keeps capturing while the screen sleeps, but the encoder's surface stops producing frames and the receiver freezes on the last one. Sets `FLAG_KEEP_SCREEN_ON` for the length of a session only. |
 | **Default legacy video key** | The app-wide fallback for the per-receiver `KeySeed`. A receiver with its own choice, set from its row menu, still wins. |
+| **Update channel** | Off by default. *Stable* offers tagged releases, *Nightly* also offers pre-releases. See [App updates](#app-updates). |
 | **Diagnostics** | Where the session log is, and the `run-as` command that reads it. |
+
+## App updates
+
+The settings screen can check this project's GitHub releases for a newer build,
+download the APK and hand it to Android's installer. It is **off by default**,
+and nothing is ever installed without the system installer's own confirmation.
+
+| | |
+|---|---|
+| **Off** | No network request is made at all. |
+| **Stable releases** | Reads `releases/latest/download/update.json`. GitHub resolves `latest` itself, and it **excludes pre-releases**, so this channel never sees a nightly. |
+| **Nightly builds** | Reads `releases/download/nightly/update.json`, the rolling pre-release tag. |
+
+The two channels use different URL shapes on purpose. There is no
+`releases/download/latest/...` -- that path is a 404 -- and a single
+`releases/latest` URL cannot serve the nightly channel, because GitHub skips
+pre-releases when resolving it. Verified against this repository, whose only
+release is a pre-release.
+
+### What is checked before an install
+
+- The manifest is **https only**; a cleartext `apkUrl` is dropped at parse time,
+  so a network attacker cannot redirect the download.
+- The downloaded file is **SHA-256 checked** against the manifest, and a mismatch
+  deletes it rather than handing it to the installer.
+- The APK is written to a `.part` file and renamed only once complete, so an
+  interrupted download is never mistaken for a good one.
+- The download is exposed through a `FileProvider` with a read-only grant; a
+  `file://` URI would throw `FileUriExposedException`.
+- The **"install unknown apps"** grant is checked *before* the download starts,
+  and the row offers the Settings page instead. Downloading ~10 MB and then
+  discovering the grant is missing would waste the user's data.
+
+### Version codes
+
+`versionCode` is the only number Android will accept an upgrade on, so it must
+increase across **every** published build, from either channel. Both workflows
+therefore derive it from **one shared sequence, the git commit count**:
+
+| | `versionName` | `versionCode` |
+|---|---|---|
+| Nightly | `0.1.0-nightly.<commits>.<sha>` | `<commits>` |
+| Release (`v0.2.0`) | `0.2.0` | `<commits at the tag>` |
+| Local build | `app.version.base` | `major*10000 + minor*100 + patch` |
+
+This is what lets a user move between channels in either direction and always be
+offered an upgrade. Deriving a release's code from its *name* (`0.2.0` -> `10200`)
+would break exactly that: someone on nightly build 20000 would be told that
+`0.2.0` is older than what they already have, and Android would refuse the
+install. `WorkflowManifestContractTest` pins this.
+
+Both workflows check out with `fetch-depth: 0`; a shallow clone reports a commit
+count of 1 and would hand every nightly the same code.
+
+### Releasing
+
+- **Nightly** is automatic: every push to `main` moves the rolling `nightly` tag
+  and replaces the APK and `update.json` on that pre-release.
+- **Release** is `git tag v0.2.0 && git push origin v0.2.0`, or the *Release*
+  workflow with a tag. It builds a signed APK and opens a **draft** release.
+  Nothing reaches the stable channel until a human presses *Publish release*,
+  because GitHub's `latest` ignores drafts. The workflow fails rather than
+  publishing an unsigned APK, which could not be installed over an existing one.
 
 ## Video-URL handoff (AirPlay 1)
 
@@ -210,6 +274,10 @@ gradlew.bat :app:installDebug
 > On this development machine `ANDROID_ADB_SERVER_PORT=5137` is set, so `adb` must be
 > invoked on that port or it will not see any devices.
 
+A local build takes its version from `app.version.base` in `gradle.properties`
+and is never published. CI overrides both the name and the code through
+`APP_VERSION_NAME` / `APP_VERSION_CODE` -- see [Version codes](#version-codes).
+
 ### Toolchain
 
 Versions are pinned deliberately and should not be bumped to "newest stable" without
@@ -241,11 +309,17 @@ AGP 9 ships **built-in Kotlin**: `org.jetbrains.kotlin.android` must not be appl
   - `http/`: RTSP/HTTP codec, HAP-encrypted framing, and Digest.
   - `mirror/`: `MirrorSession`, `ScreenAudioStream`, `ReceiverClock`, `AlacVerbatim`
     and the H.264 helpers.
+  - `update/`: version comparison, the `update.json` reader (a small strict JSON
+    parser, since the module has no third-party runtime dependency) and the rule
+    that decides which release is offered. No `android.*`, so the decision that
+    matters -- *is this an upgrade?* -- is tested in milliseconds rather than on a
+    device.
 - **`:app`**: Compose UI, `NsdManager` discovery (only while the device list is on
   screen; there is no background discovery service), and the mirroring pipeline. The
   pipeline is `MirrorService`, a mediaProjection foreground service, which runs
   `ScreenEncoder` (VirtualDisplay → MediaCodec) and `AudioCapture`
-  (AudioPlaybackCapture). Pairings are kept in `PairingStore`.
+  (AudioPlaybackCapture). Pairings are kept in `PairingStore`. `update/` is the
+  network half of the updater: fetch, verify, hand to the installer.
 
 The split exists because the `features` bitmask is the easiest thing in the whole
 protocol to get wrong: it is serialised `0x<low32>,0x<high32>` with the **low word
@@ -266,6 +340,9 @@ first**, and reading it backwards silently misreads every capability.
   [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md).
 - ✅ **Add a receiver by address**, for one mDNS cannot reach (a VPN, or the host
   seen from an emulator as `10.0.2.2`).
+- ✅ **In-app updater**, off by default: stable and nightly channels, SHA-256
+  checked downloads, handed to Android's installer. Tagged releases open a
+  **draft** GitHub release. See [App updates](#app-updates).
 - ⬜ Mirroring to receivers that use an on-screen PIN (`flags` bit 9) or transient
   pairing.
 - ⬜ `/play` inside the encrypted channel for AirPlay 2 receivers.

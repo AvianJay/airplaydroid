@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one directory the FileProvider exposes: the updater's download cache.
+
+     Deliberately not `files-path` or the app root. The provider is the only
+     thing standing between a content URI and the rest of this app's private
+     storage, and the updater needs exactly one directory.
+
+     `cache-path` with the `updates/` subdirectory matches
+     `ApkDownloader.download(..., File(context.cacheDir, "updates"))`; if that
+     path changes, this file must change with it or the install intent fails with
+     "no content provider found for URI". -->
+<paths>
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>
