@@ -58,6 +58,34 @@
             </intent-filter>
         </activity>
 
+        <!-- The casting popup, opened from the Quick Settings tile. Not exported:
+             only this app's tile starts it, and it needs no other entry point.
+             excludeFromRecents keeps it out of the app switcher, so closing it
+             returns to whatever was underneath rather than to a recents entry.
+             The translucent theme is what makes it read as a dialog over the
+             current screen instead of a screen of its own. -->
+        <activity
+            android:name=".CastPopupActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.AirPlayDroid.Popup" />
+
+        <!-- The Quick Settings tile. Exported, and it must be: the SystemUI
+             process binds it to render the tile, and android:icon is what the
+             user sees when picking a tile to add. -->
+        <service
+            android:name=".CastTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_cast"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- Screen mirroring. A MediaProjection can only be obtained from a service
              already in the foreground as mediaProjection, entered after capture
              consent. Discovery has no service: it runs only while the picker is

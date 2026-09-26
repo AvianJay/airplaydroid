@@ -52,8 +52,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -281,7 +279,12 @@ fun DevicePickerScreen(
     }
 }
 
-private enum class RowStatus(@param:StringRes val label: Int) {
+/**
+ * What the row's second line says about a device. Shared with the Quick Settings
+ * popup, which renders the same rows: two status rules would be two answers to
+ * "can this one be mirrored to?", and they would drift.
+ */
+internal enum class RowStatus(@param:StringRes val label: Int) {
     Mirroring(R.string.device_status_mirroring),
     Pairing(R.string.mirror_status_pairing),
     Connecting(R.string.mirror_status_connecting),
@@ -289,7 +292,7 @@ private enum class RowStatus(@param:StringRes val label: Int) {
     CannotMirror(R.string.device_status_cannot_mirror),
 }
 
-private fun rowStatusFor(device: AirPlayDevice, saved: PairingStore.Summary?, mirror: MirrorUiState): RowStatus? {
+internal fun rowStatusFor(device: AirPlayDevice, saved: PairingStore.Summary?, mirror: MirrorUiState): RowStatus? {
     if (mirror.active && mirror.device?.key == device.key) {
         return when (mirror.phase) {
             MirrorUiState.Phase.Mirroring -> RowStatus.Mirroring
@@ -308,8 +311,13 @@ private fun rowStatusFor(device: AirPlayDevice, saved: PairingStore.Summary?, mi
     return null
 }
 
+/**
+ * One receiver. Shared with the Quick Settings popup, which passes
+ * `showMenu = false`: the row's overflow menu holds the video-URL handoff,
+ * **Forget pairing** and the legacy-key choice, all of which belong to the app.
+ */
 @Composable
-private fun DeviceRow(
+internal fun DeviceRow(
     device: AirPlayDevice,
     status: RowStatus?,
     mirroringHere: Boolean,
@@ -318,6 +326,7 @@ private fun DeviceRow(
     onClick: () -> Unit,
     onPlayUrl: () -> Unit,
     onForget: () -> Unit,
+    showMenu: Boolean = true,
     legacyKeySeed: KeySeed? = null,
     onCycleLegacyKey: () -> Unit = {},
 ) {
@@ -374,18 +383,20 @@ private fun DeviceRow(
             }
         },
         trailingContent = {
-            DeviceMenu(
-                deviceName = device.displayName,
-                canPlayUrl = canPlayUrl,
-                paired = paired,
-                // Forgetting the pairing a live session runs on would only make
-                // the next session pair again; not worth offering mid-session.
-                forgetEnabled = !mirroringHere,
-                onPlayUrl = onPlayUrl,
-                onForget = onForget,
-                legacyKeySeed = legacyKeySeed,
-                onCycleLegacyKey = onCycleLegacyKey,
-            )
+            if (showMenu) {
+                DeviceMenu(
+                    deviceName = device.displayName,
+                    canPlayUrl = canPlayUrl,
+                    paired = paired,
+                    // Forgetting the pairing a live session runs on would only make
+                    // the next session pair again; not worth offering mid-session.
+                    forgetEnabled = !mirroringHere,
+                    onPlayUrl = onPlayUrl,
+                    onForget = onForget,
+                    legacyKeySeed = legacyKeySeed,
+                    onCycleLegacyKey = onCycleLegacyKey,
+                )
+            }
         },
     )
 }
@@ -453,45 +464,6 @@ private fun DeviceMenu(
     }
 }
 
-/** Shown only once the receiver is actually displaying a PIN. */
-@Composable
-private fun PinDialog(
-    deviceName: String,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var pin by rememberSaveable { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.pin_dialog_title, deviceName)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.pin_dialog_body),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                OutlinedTextField(
-                    value = pin,
-                    onValueChange = { pin = it.filter(Char::isDigit).take(8) },
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.play_dialog_pin_label)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(pin) }, enabled = pin.length >= 4) {
-                Text(stringResource(R.string.action_pair))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
-        },
-    )
-}
-
 /**
  * A receiver discovery cannot see: across a VPN or tunnel, or the host seen from
  * an Android emulator, where multicast does not pass. The port is the
@@ -538,56 +510,6 @@ private fun AddAddressDialog(
         confirmButton = {
             TextButton(onClick = { onConfirm(host, portNumber!!) }, enabled = valid) {
                 Text(stringResource(R.string.action_add))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
-        },
-    )
-}
-
-/** Asked only when the receiver wants a password and none is saved for it. */
-@Composable
-private fun MirrorPasswordDialog(
-    device: AirPlayDevice,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    // Plain remember, not rememberSaveable: the secret must not be written into
-    // the saved-state Bundle, and configChanges already keeps it across rotation.
-    var password by remember(device.key) { mutableStateOf("") }
-    val focus = remember { FocusRequester() }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.mirror_password_title, device.displayName)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.mirror_password_body),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.play_dialog_password_label)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done,
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { if (password.isNotEmpty()) onConfirm(password) }),
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp).focusRequester(focus),
-                )
-                // Inside the dialog's own composition, so the field is attached
-                // by the time this runs.
-                LaunchedEffect(Unit) { focus.requestFocus() }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(password) }, enabled = password.isNotEmpty()) {
-                Text(stringResource(R.string.action_mirror))
             }
         },
         dismissButton = {

@@ -62,6 +62,36 @@ shows, rotation works, and the sound plays.
 In the app, tapping a device starts mirroring. A password-protected receiver asks
 for its AirPlay password once, the first time.
 
+## Quick Settings tile
+
+The app adds a **Cast screen** tile. Adding it to the Quick Settings panel (pull
+the panel down, *Edit tiles*, drag it in) makes mirroring reachable from any
+screen, without opening the app first: one tap on the tile opens a popup with the
+device list over whatever is on screen, and tapping a receiver starts mirroring.
+
+| | |
+|---|---|
+| **Tap** | Opens the casting popup: the device list, and **Stop** while a session runs. |
+| **Tile state** | Lit while a session is running, and its subtitle names the receiver. |
+| **Popup** | Tap outside it, press back, or **Close** to dismiss. **Open app** goes to the picker for everything the popup leaves out. |
+| **Dismissing is not stopping** | Mirroring continues, exactly as it does when the picker is closed. Stop is the popup's button and the notification's action. |
+
+The popup is deliberately not the picker in a smaller frame. It carries the two
+things worth a gesture -- the device list and Stop -- and leaves pairing
+management, **Add by address**, **Play video URL** and settings in the app.
+
+It is a translucent activity rather than a `Dialog` or a system overlay, for one
+decisive reason: **screen-capture consent can only be requested from a foreground
+activity.** The consent prompt is a real activity launched for result, and a
+`TileService` is a service, so a tile that tried to start mirroring directly would
+fail at the one step the feature exists to reach. Everything else follows from
+that -- the tile opens the popup, and the popup asks for consent.
+
+The tile uses `startActivityAndCollapse(PendingIntent)` on API 34+, where the
+`Intent` overload throws `UnsupportedOperationException` for an app targeting 34,
+and the `Intent` overload below it, where the `PendingIntent` one does not exist.
+Both are needed; neither is a fallback for the other.
+
 ### The session, end to end
 
 | Step | What happens |
@@ -314,12 +344,17 @@ AGP 9 ships **built-in Kotlin**: `org.jetbrains.kotlin.android` must not be appl
     that decides which release is offered. No `android.*`, so the decision that
     matters -- *is this an upgrade?* -- is tested in milliseconds rather than on a
     device.
-- **`:app`**: Compose UI, `NsdManager` discovery (only while the device list is on
-  screen; there is no background discovery service), and the mirroring pipeline. The
-  pipeline is `MirrorService`, a mediaProjection foreground service, which runs
-  `ScreenEncoder` (VirtualDisplay → MediaCodec) and `AudioCapture`
-  (AudioPlaybackCapture). Pairings are kept in `PairingStore`. `update/` is the
-  network half of the updater: fetch, verify, hand to the installer.
+- **`:app`**: Compose UI, `NsdManager` discovery (only while a screen that lists
+  devices is on screen; there is no background discovery service), and the
+  mirroring pipeline. The two such screens are `MainActivity`, the picker, and
+  `CastPopupActivity`, the Quick Settings popup; both extend `MirrorHostActivity`,
+  which owns the one way a session may be started (claim the controller, collect
+  the audio permission, ask for capture consent). The pipeline is `MirrorService`,
+  a mediaProjection foreground service, which runs `ScreenEncoder`
+  (VirtualDisplay → MediaCodec) and `AudioCapture` (AudioPlaybackCapture).
+  `CastTileService` is the Quick Settings tile. Pairings are kept in
+  `PairingStore`. `update/` is the network half of the updater: fetch, verify,
+  hand to the installer.
 
 The split exists because the `features` bitmask is the easiest thing in the whole
 protocol to get wrong: it is serialised `0x<low32>,0x<high32>` with the **low word
@@ -340,6 +375,8 @@ first**, and reading it backwards silently misreads every capability.
   [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md).
 - ✅ **Add a receiver by address**, for one mDNS cannot reach (a VPN, or the host
   seen from an emulator as `10.0.2.2`).
+- ✅ **Quick Settings tile**: one tap opens the casting popup, so mirroring starts
+  without opening the app. See [Quick Settings tile](#quick-settings-tile).
 - ✅ **In-app updater**, off by default: stable and nightly channels, SHA-256
   checked downloads, handed to Android's installer. Tagged releases open a
   **draft** GitHub release. See [App updates](#app-updates).

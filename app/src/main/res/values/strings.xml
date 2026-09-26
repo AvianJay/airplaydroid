@@ -104,4 +104,12 @@
     <string name="mirror_already_active">Already mirroring to %1$s. Stop it first.</string>
     <string name="mirror_error_password_rejected">%1$s did not accept that password.</string>
     <string name="mirror_error_saved_password_rejected">%1$s did not accept the saved password. Tap it again to enter the current one.</string>
+
+    <!-- The casting popup, opened from the Quick Settings tile. -->
+    <string name="popup_title">Cast screen</string>
+    <string name="popup_open_app">Open app</string>
+    <string name="popup_close_description">Close</string>
+    <string name="tile_label">Cast screen</string>
+    <string name="tile_subtitle_idle">Tap to choose a receiver</string>
+    <string name="tile_subtitle_active">Mirroring</string>
 </resources>

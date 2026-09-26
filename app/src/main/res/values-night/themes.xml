@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.AirPlayDroid" parent="android:Theme.Material.NoActionBar" />
+
+    <!-- The popup, in dark. Same shape as the light one: a translucent,
+         full-screen window that the activity draws its own scrim and card into,
+         so the dimming does not double up with the window's own. -->
+    <style name="Theme.AirPlayDroid.Popup" parent="android:Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

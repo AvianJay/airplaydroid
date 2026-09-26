@@ -4,4 +4,28 @@
          There is no AppCompat or Material Components XML dependency, so this must
          not inherit from Theme.MaterialComponents.* or Theme.AppCompat.*. -->
     <style name="Theme.AirPlayDroid" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- The casting popup, opened from the Quick Settings tile.
+         WindowIsTranslucent is what lets the app underneath show through, and
+         WindowIsFloating=false is what makes the window full-screen rather than
+         sized to its content: the activity draws its own full-screen scrim with
+         the card centred in it, so that it controls the dimming in both light and
+         dark rather than inheriting a platform default.
+         BackgroundDimEnabled is therefore OFF: the Compose scrim is the only
+         dimming, and leaving the window's own dim on would double it.
+         Do NOT set windowIsTranslucent on the launcher theme: a translucent
+         launcher activity is repainted behind the recents animation and shows
+         through as a flicker. -->
+    <style name="Theme.AirPlayDroid.Popup" parent="android:Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- No platform enter/exit animation: the activity draws a scrim and a
+             card, so the Dialog theme's default fade-and-scale would animate the
+             whole backdrop, which reads as a screen transition rather than a
+             dialog appearing over the current one. -->
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>
