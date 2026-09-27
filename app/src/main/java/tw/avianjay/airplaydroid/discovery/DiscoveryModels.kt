@@ -17,6 +17,12 @@ sealed interface DiscoveryEvent {
     data class ScanStopped(val type: AirPlayServiceType) : DiscoveryEvent
     data class ServiceResolved(val type: AirPlayServiceType, val device: AirPlayDevice) : DiscoveryEvent
     data class ServiceLost(val type: AirPlayServiceType, val key: String) : DiscoveryEvent
+
+    /**
+     * [type] could not start browsing. [reason] is the platform's own word for
+     * why -- an NsdManager error name or an exception's message -- and the
+     * screen puts it into a sentence in the app's language.
+     */
     data class Failure(val type: AirPlayServiceType, val reason: String) : DiscoveryEvent
 }
 
@@ -33,7 +39,7 @@ data class DiscoveryUiState(
     val devices: List<AirPlayDevice> = emptyList(),
     /** Types whose NSD browse is running in the current round. */
     val scanning: Set<AirPlayServiceType> = emptySet(),
-    val lastError: String? = null,
+    val lastError: DiscoveryEvent.Failure? = null,
 ) {
     val isScanning: Boolean get() = scanning.isNotEmpty()
 }

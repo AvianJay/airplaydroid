@@ -43,7 +43,11 @@ class ScreenEncoder(
     val width: Int,
     val height: Int,
     private val densityDpi: Int,
-    private val onFailure: (String) -> Unit,
+    /**
+     * Why streaming stopped mid-session: an IOException when the connection
+     * drops, an IllegalStateException when the codec does. The caller words it.
+     */
+    private val onFailure: (Exception) -> Unit,
 ) {
     private lateinit var codec: MediaCodec
     private var inputSurface: Surface? = null
@@ -149,10 +153,10 @@ class ScreenEncoder(
                 session.sendFrame(H264.toAvcc(vcl), keyframe, captureNanos(info.presentationTimeUs))
             }
         } catch (e: IOException) {
-            if (running) onFailure("Lost the video connection: ${e.message}")
+            if (running) onFailure(e)
         } catch (e: IllegalStateException) {
             // The codec was stopped under us by stop(); only report if unexpected.
-            if (running) onFailure("The video encoder stopped: ${e.message}")
+            if (running) onFailure(e)
         }
     }
 

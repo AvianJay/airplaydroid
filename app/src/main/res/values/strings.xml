@@ -1,18 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AirPlayDroid</string>
+    <!-- A brand name, not a phrase: the same in every language. Marked
+         translatable="false" so lint's MissingTranslation does not demand a
+         copy of it in every values-* folder. -->
+    <string name="app_name" translatable="false">AirPlayDroid</string>
 
     <string name="picker_title">AirPlay devices</string>
     <string name="picker_scanning">Scanning the local network…</string>
     <string name="picker_empty_title">No AirPlay devices found yet</string>
     <string name="picker_empty_body">Make sure this phone and the receiver are on the same Wi-Fi network. Some routers block mDNS between wireless and wired clients.</string>
     <string name="picker_browsing">Browsing %1$s</string>
+    <!-- %1$s is the service type (AirPlay, RAOP); %2$s is the platform's reason,
+         an NsdManager error name or an exception's message, left in English. -->
+    <string name="discovery_error">Could not start %1$s discovery (%2$s)</string>
 
     <string name="device_resolving">Resolving…</string>
     <string name="device_status_mirroring">Mirroring</string>
     <string name="device_status_paired">Paired</string>
     <string name="device_status_cannot_mirror">Can\'t mirror</string>
     <string name="device_menu_description">More options for %1$s</string>
+
+    <!-- Capability badges under each device. -->
+    <string name="badge_audio">Audio</string>
+    <string name="badge_video">Video</string>
+    <string name="badge_airplay2" translatable="false">AirPlay 2</string>
+    <string name="badge_legacy">Legacy</string>
+    <string name="badge_needs_pin">Needs PIN</string>
+    <string name="badge_needs_password">Needs password</string>
+    <string name="badge_pairing_blocked">Pairing blocked</string>
+    <string name="badge_busy">In use</string>
 
     <string name="play_dialog_title">Play on %1$s</string>
     <string name="play_dialog_url_label">Video URL</string>
@@ -32,6 +48,20 @@
     <string name="pin_dialog_body">The receiver is now showing a PIN on screen. Enter it here.</string>
     <string name="playback_connecting">Connecting…</string>
     <string name="playback_loading">Loading…</string>
+    <string name="playback_error_no_url">Enter a video URL first.</string>
+    <string name="playback_refused_audio_only">%1$s is an audio-only receiver.</string>
+    <string name="playback_refused_home_only">%1$s restricts access control to its own Home, so it can never be paired.</string>
+    <string name="playback_refused_no_address">No resolved endpoint for %1$s yet.</string>
+    <string name="playback_error_needs_password">%1$s needs a password.</string>
+    <string name="playback_error_password_rejected">That password was not accepted by %1$s.</string>
+    <string name="playback_error_connection_lost">Lost the connection to the receiver.</string>
+    <!-- %1$s below is the protocol's own explanation (an exception's message):
+         technical, and English in every language, so only the words around it
+         are translated. -->
+    <string name="playback_error_start">Could not start playback: %1$s</string>
+    <string name="playback_error_rate">Could not change playback state: %1$s</string>
+    <string name="playback_error_seek">Could not seek: %1$s</string>
+    <string name="playback_error_pairing">Pairing failed: %1$s</string>
 
     <string name="forget_dialog_title">Forget pairing with %1$s?</string>
     <string name="forget_dialog_body">To mirror to it again, this phone will have to pair again with its AirPlay password.</string>
@@ -82,12 +112,19 @@
     <string name="settings_update_allow_install">Allow installs, then retry</string>
     <string name="settings_update_allow_install_body">Android needs your permission before this app can open its installer. The switch is on the page that just opened.</string>
     <string name="settings_update_open_release">Open the release page</string>
+    <string name="settings_update_installer_failed">Downloaded the update, but could not open the installer. Allow this app to install unknown apps, then try again.</string>
+    <!-- %1$s: why, in the downloader's own (English) words. -->
+    <string name="settings_update_check_failed">Could not check for updates: %1$s</string>
+    <string name="settings_update_download_failed">The download failed: %1$s</string>
 
     <string name="add_address_title">Add a receiver by address</string>
     <string name="add_address_body">For a receiver discovery cannot see: across a VPN, or this computer (10.0.2.2) from an emulator.</string>
     <string name="add_address_host_label">Host or IP address</string>
     <string name="add_address_port_label">Port</string>
     <string name="add_address_added">Added %1$s</string>
+    <!-- %1$s: why, in the lookup's own (English) words, e.g. "no AirPlay
+         receiver answered at 10.0.2.2:7000 (Connection refused)". -->
+    <string name="add_address_failed">Could not add the receiver: %1$s</string>
     <string name="legacy_key_auto">Video key: automatic</string>
     <string name="legacy_key_raw">Video key: raw FairPlay key</string>
     <string name="legacy_key_mixed">Video key: mixed with pairing</string>
@@ -104,6 +141,27 @@
     <string name="mirror_already_active">Already mirroring to %1$s. Stop it first.</string>
     <string name="mirror_error_password_rejected">%1$s did not accept that password.</string>
     <string name="mirror_error_saved_password_rejected">%1$s did not accept the saved password. Tap it again to enter the current one.</string>
+    <string name="mirror_error_wants_password">%1$s wants its AirPlay password. Tap it again to enter it.</string>
+    <string name="mirror_error_needs_password">%1$s needs its AirPlay password to pair.</string>
+    <string name="mirror_error_wrong_code">That code did not match the one on %1$s. Tap it to try again.</string>
+    <string name="mirror_error_no_consent">Screen capture permission was not granted.</string>
+    <string name="mirror_error_no_address">No address for %1$s.</string>
+    <!-- The last argument below is the protocol's own explanation (an
+         exception's message, or the receiver's reason for ending the session):
+         technical, and English in every language, so only the words around it
+         are translated. -->
+    <string name="mirror_error_refused">%1$s refused mirroring (%2$s).</string>
+    <string name="mirror_error_pairing_failed">Could not pair with %1$s: %2$s</string>
+    <string name="mirror_error_failed">Could not mirror to %1$s: %2$s</string>
+    <string name="mirror_error_connection_ended">The connection to %1$s ended: %2$s</string>
+    <string name="mirror_error_video_lost">Lost the video connection: %1$s</string>
+    <string name="mirror_error_encoder_stopped">The video encoder stopped: %1$s</string>
+
+    <!-- Why a tap on a receiver cannot mirror to it. -->
+    <string name="mirror_refused_unsupported">%1$s does not accept screen mirroring.</string>
+    <string name="mirror_refused_unresolved">%1$s has not been fully resolved yet.</string>
+    <string name="mirror_refused_home_only">%1$s only allows devices from its own Home.</string>
+    <string name="mirror_refused_no_address">No address for %1$s yet.</string>
 
     <!-- The casting popup, opened from the Quick Settings tile. -->
     <string name="popup_title">Cast screen</string>

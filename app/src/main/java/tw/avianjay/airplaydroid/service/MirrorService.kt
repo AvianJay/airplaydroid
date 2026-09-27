@@ -103,7 +103,7 @@ class MirrorService : Service() {
         val manager = getSystemService(MediaProjectionManager::class.java)
         val mp = manager.getMediaProjection(resultCode, grant)
         if (mp == null) {
-            finish("Screen capture permission was not granted.", why = "getMediaProjection returned null")
+            finish(getString(R.string.mirror_error_no_consent), why = "getMediaProjection returned null")
             return START_NOT_STICKY
         }
         synchronized(lock) { projection = mp }
@@ -134,7 +134,7 @@ class MirrorService : Service() {
 
     private fun connect(device: tw.avianjay.airplaydroid.protocol.AirPlayDevice, typedPassword: String?, mp: MediaProjection) {
         val endpoint = device.videoEndpoint
-            ?: return finish("No address for ${device.displayName}.", why = "no endpoint")
+            ?: return finish(getString(R.string.mirror_error_no_address, device.displayName), why = "no endpoint")
 
         // A receiver that does not advertise HAP pairing speaks the legacy
         // protocol: FairPlay SAP, then RTSP type 110 (or port-7100 /stream). Its
@@ -167,7 +167,7 @@ class MirrorService : Service() {
 
             var entry = saved ?: run {
                 if (password == null) {
-                    return finish("${device.displayName} needs its AirPlay password to pair.", why = "no password")
+                    return finish(getString(R.string.mirror_error_needs_password, device.displayName), why = "no password")
                 }
                 MirrorController.setPhase(Phase.Pairing)
                 // pair-setup uses the password as its SRP secret, so a completed
@@ -213,7 +213,7 @@ class MirrorService : Service() {
             }
             finish(
                 when {
-                    e.status != 401 -> "${device.displayName} refused mirroring (${e.message})."
+                    e.status != 401 -> getString(R.string.mirror_error_refused, device.displayName, e.message)
                     !typedPassword.isNullOrEmpty() -> getString(R.string.mirror_error_password_rejected, device.displayName)
                     else -> getString(R.string.mirror_error_saved_password_rejected, device.displayName)
                 },
@@ -228,7 +228,7 @@ class MirrorService : Service() {
                 e.error == tw.avianjay.airplaydroid.protocol.pairing.Tlv8.PairError.AUTHENTICATION
             finish(
                 when {
-                    !rejected -> "Could not pair with ${device.displayName}: ${e.message}"
+                    !rejected -> getString(R.string.mirror_error_pairing_failed, device.displayName, e.message)
                     // The re-pair after a failed pair-verify runs on the saved
                     // password when nothing was typed.
                     typedPassword.isNullOrEmpty() -> getString(R.string.mirror_error_saved_password_rejected, device.displayName)
@@ -238,7 +238,7 @@ class MirrorService : Service() {
             )
         } catch (e: Exception) {
             Log.w(TAG, "mirroring failed", e)
-            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")
+            finish(getString(R.string.mirror_error_failed, device.displayName, e.message), why = "setup: $e")
         }
     }
 
@@ -262,7 +262,9 @@ class MirrorService : Service() {
         // The _airplay._tcp port first, as on every Apple TV; the _raop._tcp port
         // when that one does not speak RTSP (AirScreen: 57000 vs 5000).
         val candidates = listOfNotNull(device.videoEndpoint, device.raopEndpoint).distinct()
-        if (candidates.isEmpty()) return finish("No address for ${device.displayName}.", why = "no endpoint")
+        if (candidates.isEmpty()) {
+            return finish(getString(R.string.mirror_error_no_address, device.displayName), why = "no endpoint")
+        }
         try {
             MirrorController.setPhase(Phase.Connecting)
             val endpoint = LegacyMirrorSessionFactory.findRtspEndpoint(candidates) ?: candidates.first()
@@ -274,7 +276,10 @@ class MirrorService : Service() {
                 password = typedPassword?.takeIf { it.isNotEmpty() },
                 senderName = appSettings.clientName(),
                 onEnded = { reason ->
-                    finish("The connection to ${device.displayName} ended: $reason", why = "legacy session: $reason")
+                    finish(
+                        getString(R.string.mirror_error_connection_ended, device.displayName, reason),
+                        why = "legacy session: $reason",
+                    )
                 },
                 trace = { MirrorLog.write("legacy: $it") },
                 keySeed = keys.get(device.key, appSettings.state.value.defaultLegacyKeySeed),
@@ -295,8 +300,8 @@ class MirrorService : Service() {
             }
 
             val (width, height) = ScreenEncoder.canvasFor(opened.display)
-            val started = ScreenEncoder(mp, opened.video, width, height, resources.displayMetrics.densityDpi) { reason ->
-                finish(reason, why = "legacy encoder: $reason")
+            val started = ScreenEncoder(mp, opened.video, width, height, resources.displayMetrics.densityDpi) { e ->
+                finish(encoderFailure(e), why = "legacy encoder: $e")
             }
             started.start()
             val kept = synchronized(lock) { if (stopping) false else { encoder = started; true } }
@@ -316,16 +321,16 @@ class MirrorService : Service() {
                 // Nothing was saved for a legacy receiver, so the next tap asks again.
                 MirrorController.markNeedsPassword(device.key)
                 finish(
-                    if (typedPassword.isNullOrEmpty()) "${device.displayName} wants its AirPlay password. Tap it again to enter it."
+                    if (typedPassword.isNullOrEmpty()) getString(R.string.mirror_error_wants_password, device.displayName)
                     else getString(R.string.mirror_error_password_rejected, device.displayName),
                     why = "legacy: ${e.message}",
                 )
                 return
             }
-            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "legacy: ${e.message}")
+            finish(getString(R.string.mirror_error_failed, device.displayName, e.message), why = "legacy: ${e.message}")
         } catch (e: Exception) {
             Log.w(TAG, "legacy mirroring failed", e)
-            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "legacy setup: $e")
+            finish(getString(R.string.mirror_error_failed, device.displayName, e.message), why = "legacy setup: $e")
         }
     }
 
@@ -348,8 +353,8 @@ class MirrorService : Service() {
             opened.receiverDisplay?.let { ReceiverDisplay(it.width, it.height) },
         )
         val dpi = resources.displayMetrics.densityDpi
-        val started = ScreenEncoder(mp, opened, width, height, dpi) { reason ->
-            finish(reason, why = "encoder: $reason")
+        val started = ScreenEncoder(mp, opened, width, height, dpi) { e ->
+            finish(encoderFailure(e), why = "encoder: $e")
         }
         started.start()
         val kept = synchronized(lock) { if (stopping) false else { encoder = started; true } }
@@ -389,7 +394,9 @@ class MirrorService : Service() {
                 senderName = appSettings.clientName(),
                 withAudio = synchronized(lock) { audio != null },
                 features = device.airPlayTxt?.features?.raw ?: 0uL,
-            ) { reason -> finish("The connection to ${device.displayName} ended: $reason", why = "session: $reason") }
+            ) { reason ->
+                finish(getString(R.string.mirror_error_connection_ended, device.displayName, reason), why = "session: $reason")
+            }
             MirrorLog.write("transient pairing with ${device.displayName} succeeded")
             startStreaming(device, opened, mp)
         } catch (e: HomeKitPairing.Failure.Refused) {
@@ -399,15 +406,21 @@ class MirrorService : Service() {
                 // transient M3 with 470). Ask for it on the next tap.
                 MirrorController.markNeedsPassword(device.key)
                 finish(
-                    "${device.displayName} wants its AirPlay password. Tap it again to enter it.",
+                    getString(R.string.mirror_error_wants_password, device.displayName),
                     why = "transient pairing: 470, marked as needing a password",
                 )
             } else {
-                finish("Could not pair with ${device.displayName}: ${e.message}", why = "transient pairing: ${e.message}")
+                finish(
+                    getString(R.string.mirror_error_pairing_failed, device.displayName, e.message),
+                    why = "transient pairing: ${e.message}",
+                )
             }
         } catch (e: HomeKitPairing.Failure) {
             Log.w(TAG, "transient pairing failed", e)
-            finish("Could not pair with ${device.displayName}: ${e.message}", why = "transient pairing: ${e.message}")
+            finish(
+                getString(R.string.mirror_error_pairing_failed, device.displayName, e.message),
+                why = "transient pairing: ${e.message}",
+            )
         } catch (e: MirrorSession.Failure.Refused) {
             Log.w(TAG, "mirroring refused", e)
             if (e.status == 401) {
@@ -415,15 +428,18 @@ class MirrorService : Service() {
                 // password-protected. The next tap asks and pairs persistently.
                 MirrorController.markNeedsPassword(device.key)
                 finish(
-                    "${device.displayName} wants its AirPlay password. Tap it again to enter it.",
+                    getString(R.string.mirror_error_wants_password, device.displayName),
                     why = "refused: 401 after transient pairing, marked as needing a password",
                 )
             } else {
-                finish("${device.displayName} refused mirroring (${e.message}).", why = "refused: ${e.message}")
+                finish(
+                    getString(R.string.mirror_error_refused, device.displayName, e.message),
+                    why = "refused: ${e.message}",
+                )
             }
         } catch (e: Exception) {
             Log.w(TAG, "mirroring failed", e)
-            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")
+            finish(getString(R.string.mirror_error_failed, device.displayName, e.message), why = "setup: $e")
         }
     }
 
@@ -450,16 +466,16 @@ class MirrorService : Service() {
             val wrongCode = e is HomeKitPairing.Failure.Rejected &&
                 e.error == tw.avianjay.airplaydroid.protocol.pairing.Tlv8.PairError.AUTHENTICATION
             finish(
-                if (wrongCode) "That code did not match the one on ${device.displayName}. Tap it to try again."
-                else "Could not pair with ${device.displayName}: ${e.message}",
+                if (wrongCode) getString(R.string.mirror_error_wrong_code, device.displayName)
+                else getString(R.string.mirror_error_pairing_failed, device.displayName, e.message),
                 why = "PIN pairing: ${e.message}",
             )
         } catch (e: MirrorSession.Failure.Refused) {
             Log.w(TAG, "mirroring refused", e)
-            finish("${device.displayName} refused mirroring (${e.message}).", why = "refused: ${e.message}")
+            finish(getString(R.string.mirror_error_refused, device.displayName, e.message), why = "refused: ${e.message}")
         } catch (e: Exception) {
             Log.w(TAG, "mirroring failed", e)
-            finish("Could not mirror to ${device.displayName}: ${e.message}", why = "setup: $e")
+            finish(getString(R.string.mirror_error_failed, device.displayName, e.message), why = "setup: $e")
         }
     }
 
@@ -483,7 +499,9 @@ class MirrorService : Service() {
         senderName = appSettings.clientName(),
         withAudio = audio != null,
         features = device.airPlayTxt?.features?.raw ?: 0uL,
-    ) { reason -> finish("The connection to ${device.displayName} ended: $reason", why = "session: $reason") }
+    ) { reason ->
+        finish(getString(R.string.mirror_error_connection_ended, device.displayName, reason), why = "session: $reason")
+    }
 
     /**
      * The app-wide settings. The service runs one session, so one read at
@@ -491,6 +509,11 @@ class MirrorService : Service() {
      * session see the same values.
      */
     private val appSettings by lazy { SettingsStore(this) }
+
+    /** What the user is told when [ScreenEncoder] gives up; the exception itself goes to the log. */
+    private fun encoderFailure(e: Exception): String =
+        if (e is java.io.IOException) getString(R.string.mirror_error_video_lost, e.message)
+        else getString(R.string.mirror_error_encoder_stopped, e.message)
 
     /**
      * Ends the session. Idempotent and safe from any thread. [error] is shown to

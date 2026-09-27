@@ -1,6 +1,8 @@
 package tw.avianjay.airplaydroid.playback
 
+import android.content.Context
 import android.util.Log
+import androidx.annotation.StringRes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,9 +18,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import tw.avianjay.airplaydroid.R
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
 import tw.avianjay.airplaydroid.protocol.AirPlayRequestFailed
 import tw.avianjay.airplaydroid.protocol.AirPlayV1Session
+import tw.avianjay.airplaydroid.protocol.ConnectionRefusal
 import tw.avianjay.airplaydroid.protocol.PlaybackInfo
 import tw.avianjay.airplaydroid.protocol.StatusFlags
 import tw.avianjay.airplaydroid.protocol.VideoHandoff
@@ -47,6 +51,11 @@ data class PlaybackUiState(
  * Process-scoped for the same reason [tw.avianjay.airplaydroid.discovery.DiscoveryRepository]
  * is: the session must outlive activity recreation. All socket work runs on
  * [Dispatchers.IO] -- [AirPlayV1Session] is deliberately blocking.
+ *
+ * The calls that can fail take a [Context], only to word their errors in the
+ * app's language -- the same shape as [tw.avianjay.airplaydroid.update.Updater].
+ * The application context is what is kept: a poll outlives the screen that
+ * started it.
  *
  * Concurrency rules, all of which earned their place:
  *  - Every mutation of [session]/[pollJob] happens under [lock], and every
@@ -84,14 +93,17 @@ object PlaybackController {
     private var pendingEvents: AirPlayEventChannel? = null
     private var pendingSessionId: String = ""
 
-    fun play(device: AirPlayDevice, url: String, password: String? = null) {
+    fun play(context: Context, device: AirPlayDevice, url: String, password: String? = null) {
+        val appContext = context.applicationContext
         val trimmed = url.trim()
         if (trimmed.isEmpty()) {
-            _state.update { it.copy(error = "Enter a video URL first.") }
+            _state.update { it.copy(error = appContext.getString(R.string.playback_error_no_url)) }
             return
         }
         VideoHandoff.refusalFor(device)?.let { refusal ->
-            _state.value = PlaybackUiState(device = device, url = trimmed, error = refusal.message)
+            _state.value = PlaybackUiState(
+                device = device, url = trimmed, error = refusalMessage(appContext, refusal, device),
+            )
             return
         }
         val endpoint = device.videoEndpoint ?: return
@@ -145,7 +157,7 @@ object PlaybackController {
 
                     if (flags.passwordRequired && !secret.isNullOrEmpty()) {
                         // Credential already supplied in the play dialog.
-                        submitPin(secret)
+                        submitPin(appContext, secret)
                         return@launch
                     }
                     _state.value = PlaybackUiState(
@@ -178,7 +190,7 @@ object PlaybackController {
                 }
 
                 _state.update { it.copy(connecting = false, connected = true) }
-                startPolling(mine)
+                startPolling(mine, appContext)
             } catch (t: Throwable) {
                 runCatching { opened?.close() }
                 // Only the current attempt may report failure; a superseded one
@@ -187,10 +199,10 @@ object PlaybackController {
                     Log.w(TAG, "play failed", t)
                     val message = when {
                         t is AirPlayRequestFailed && t.status == 401 && password.isNullOrEmpty() ->
-                            device.displayName + " needs a password."
+                            appContext.getString(R.string.playback_error_needs_password, device.displayName)
                         t is AirPlayRequestFailed && t.status == 401 ->
-                            "That password was not accepted by " + device.displayName + "."
-                        else -> t.message ?: "Could not start playback."
+                            appContext.getString(R.string.playback_error_password_rejected, device.displayName)
+                        else -> appContext.getString(R.string.playback_error_start, t.message ?: t.javaClass.simpleName)
                     }
                     _state.value = PlaybackUiState(device = device, url = trimmed, error = message)
                 }
@@ -198,13 +210,13 @@ object PlaybackController {
         }
     }
 
-    fun togglePlayPause() {
+    fun togglePlayPause(context: Context) {
         val resume = !_state.value.isPlaying
-        runCommand("Could not change playback state.") { it.rate(if (resume) 1.0 else 0.0) }
+        runCommand(context, R.string.playback_error_rate) { it.rate(if (resume) 1.0 else 0.0) }
     }
 
-    fun seekTo(positionSeconds: Double) {
-        runCommand("Could not seek.") { it.scrub(positionSeconds) }
+    fun seekTo(context: Context, positionSeconds: Double) {
+        runCommand(context, R.string.playback_error_seek) { it.scrub(positionSeconds) }
     }
 
     fun stop() {
@@ -220,7 +232,8 @@ object PlaybackController {
     }
 
     /** Completes pairing with the PIN the receiver is displaying, then plays. */
-    fun submitPin(pin: String) {
+    fun submitPin(context: Context, pin: String) {
+        val appContext = context.applicationContext
         val control = pendingConnection ?: return
         val pairing = pendingPairing ?: return
         val challenge = pendingChallenge ?: return
@@ -233,9 +246,13 @@ object PlaybackController {
         _state.value = PlaybackUiState(device = device, url = url, connecting = true)
         scope.launch {
             val mine = lock.withLock { generation }
+            // Which step failed decides the message: a /play refused after a
+            // good PIN is not a pairing failure.
+            var paired = false
             try {
                 val pr0 = pairing
                 val creds = pr0.complete(challenge, pin.trim())
+                paired = true
                 val k: ByteArray = creds.sessionKey
                 val conn = control
                 Log.i(TAG, "PAIRED. shared secret " + (k?.size ?: 0) + " bytes")
@@ -249,14 +266,17 @@ object PlaybackController {
                 }
                 if (!adopted) { runCatching { opened.close() }; return@launch }
                 _state.update { it.copy(connecting = false, connected = true) }
-                startPolling(mine)
+                startPolling(mine, appContext)
             } catch (t: Throwable) {
                 Log.w(TAG, "pairing or playback failed", t)
                 runCatching { control.close() }
                 runCatching { events?.close() }
                 _state.value = PlaybackUiState(
                     device = device, url = url,
-                    error = t.message ?: "Pairing failed.",
+                    error = appContext.getString(
+                        if (paired) R.string.playback_error_start else R.string.playback_error_pairing,
+                        t.message ?: t.javaClass.simpleName,
+                    ),
                 )
             }
         }
@@ -287,6 +307,24 @@ object PlaybackController {
     }
 
     /**
+     * [refusal] in the app's language. Its own message is the protocol's, which
+     * has no resources to reach and so is English only.
+     */
+    private fun refusalMessage(context: Context, refusal: ConnectionRefusal, device: AirPlayDevice): String? =
+        when (refusal) {
+            is ConnectionRefusal.NoVideoSupport ->
+                context.getString(R.string.playback_refused_audio_only, device.displayName)
+            is ConnectionRefusal.PairingBlocked ->
+                context.getString(R.string.playback_refused_home_only, device.displayName)
+            is ConnectionRefusal.NoEndpoint ->
+                context.getString(R.string.playback_refused_no_address, device.displayName)
+            // Still declared by the protocol, but VideoHandoff no longer returns
+            // them: real receivers accept /play without pairing, and a password is
+            // asked for rather than refused.
+            is ConnectionRefusal.NeedsPairing, is ConnectionRefusal.NeedsPassword -> refusal.message
+        }
+
+    /**
      * Invalidates every in-flight attempt, cancels polling, and detaches the
      * current session WITHOUT closing it -- the caller decides whether it needs
      * a graceful /stop first. Returns the new generation token and the detached
@@ -302,19 +340,20 @@ object PlaybackController {
         return lock.withLock { generation to session.also { session = null } }
     }
 
-    private fun runCommand(fallback: String, block: (AirPlayV1Session) -> Unit) {
+    private fun runCommand(context: Context, @StringRes failure: Int, block: (AirPlayV1Session) -> Unit) {
+        val appContext = context.applicationContext
         scope.launch {
             val mine = lock.withLock { generation }
             val current = lock.withLock { session } ?: return@launch
             try {
                 block(current)
             } catch (t: Throwable) {
-                if (lock.withLock { generation == mine }) reportFailure(t, fallback)
+                if (lock.withLock { generation == mine }) reportFailure(appContext, t, failure)
             }
         }
     }
 
-    private suspend fun startPolling(mine: Int) {
+    private suspend fun startPolling(mine: Int, context: Context) {
         val job = scope.launch {
             var failures = 0
             while (isActive) {
@@ -343,7 +382,7 @@ object PlaybackController {
                             it.copy(
                                 connecting = false,
                                 connected = false,
-                                error = "Lost the connection to the receiver.",
+                                error = context.getString(R.string.playback_error_connection_lost),
                             )
                         }
                     }
@@ -354,8 +393,9 @@ object PlaybackController {
         lock.withLock { if (generation == mine) pollJob = job else job.cancel() }
     }
 
-    private fun reportFailure(t: Throwable, fallback: String) {
-        Log.w(TAG, fallback, t)
-        _state.update { it.copy(error = t.message ?: fallback) }
+    private fun reportFailure(context: Context, t: Throwable, @StringRes failure: Int) {
+        // The stack trace names the command (rate or scrub); the log stays English.
+        Log.w(TAG, "playback command failed", t)
+        _state.update { it.copy(error = context.getString(failure, t.message ?: t.javaClass.simpleName)) }
     }
 }

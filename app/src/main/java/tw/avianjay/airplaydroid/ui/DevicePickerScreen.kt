@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -112,6 +113,8 @@ fun DevicePickerScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     // Resolved here because the row's click lambda cannot call stringResource.
     val alreadyMirroring = stringResource(R.string.mirror_already_active, mirror.device?.displayName.orEmpty())
+    // A refusal names the device tapped, so it is worded in the click itself.
+    val resources = LocalResources.current
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -179,7 +182,7 @@ fun DevicePickerScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            state.lastError?.let { DiscoveryError(it) }
+            state.lastError?.let { DiscoveryError(stringResource(R.string.discovery_error, it.type.label, it.reason)) }
 
             if (state.devices.isEmpty()) {
                 EmptyState(state)
@@ -197,7 +200,7 @@ fun DevicePickerScreen(
                                 paired = saved != null,
                                 onClick = {
                                     when (val tap = MirrorController.tapActionFor(device, saved, mirror)) {
-                                        is MirrorTap.Refused -> onRefused(tap.message)
+                                        is MirrorTap.Refused -> onRefused(resources.getString(tap.message, device.displayName))
                                         is MirrorTap.Busy -> onRefused(alreadyMirroring)
                                         MirrorTap.AskPassword -> passwordFor = device
                                         MirrorTap.Start -> onMirror(device, null)
@@ -742,7 +745,7 @@ private fun CapabilityBadges(capabilities: List<DeviceCapability>) {
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
             ) {
                 Text(
-                    text = capability.label,
+                    text = stringResource(capability.badgeLabel()),
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     softWrap = false,
@@ -751,6 +754,18 @@ private fun CapabilityBadges(capabilities: List<DeviceCapability>) {
             }
         }
     }
+}
+
+/** A badge's words. [DeviceCapability.label] is the protocol's, and English only. */
+private fun DeviceCapability.badgeLabel(): Int = when (this) {
+    DeviceCapability.Audio -> R.string.badge_audio
+    DeviceCapability.Video -> R.string.badge_video
+    DeviceCapability.AirPlay2 -> R.string.badge_airplay2
+    DeviceCapability.Legacy -> R.string.badge_legacy
+    DeviceCapability.NeedsPin -> R.string.badge_needs_pin
+    DeviceCapability.NeedsPassword -> R.string.badge_needs_password
+    DeviceCapability.PairingBlocked -> R.string.badge_pairing_blocked
+    DeviceCapability.Busy -> R.string.badge_busy
 }
 
 /**

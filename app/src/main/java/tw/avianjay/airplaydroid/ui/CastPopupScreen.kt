@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +79,8 @@ fun CastPopupScreen(
 ) {
     var passwordFor by remember { mutableStateOf<AirPlayDevice?>(null) }
     val alreadyMirroring = stringResource(R.string.mirror_already_active, mirror.device?.displayName.orEmpty())
+    // A refusal names the device tapped, so it is worded in the click itself.
+    val resources = LocalResources.current
 
     Surface(
         modifier = modifier.fillMaxWidth().heightIn(max = 420.dp),
@@ -111,7 +114,7 @@ fun CastPopupScreen(
                             showMenu = false,
                             onClick = {
                                 when (val tap = MirrorController.tapActionFor(device, saved, mirror)) {
-                                    is MirrorTap.Refused -> onRefused(tap.message)
+                                    is MirrorTap.Refused -> onRefused(resources.getString(tap.message, device.displayName))
                                     is MirrorTap.Busy -> onRefused(alreadyMirroring)
                                     MirrorTap.AskPassword -> passwordFor = device
                                     MirrorTap.Start -> onMirror(device, null)

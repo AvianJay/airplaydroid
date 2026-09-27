@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.avianjay.airplaydroid.BuildConfig
+import tw.avianjay.airplaydroid.R
 import tw.avianjay.airplaydroid.protocol.update.InstalledVersion
 import tw.avianjay.airplaydroid.protocol.update.UpdateChannel
 import tw.avianjay.airplaydroid.protocol.update.UpdateDecision
@@ -113,6 +114,8 @@ object Updater {
         }
 
         val installed = installedVersion(context)
+        // Kept by the check for its error message; never the caller's own context.
+        val appContext = context.applicationContext
         _state.update {
             it.copy(
                 phase = UpdateUiState.Phase.Checking,
@@ -169,7 +172,10 @@ object Updater {
                     it.copy(
                         phase = UpdateUiState.Phase.Failed,
                         release = null,
-                        error = e.message ?: "Could not check for updates.",
+                        error = appContext.getString(
+                            R.string.settings_update_check_failed,
+                            e.message ?: e.javaClass.simpleName,
+                        ),
                     )
                 }
             }
@@ -221,8 +227,7 @@ object Updater {
                             _state.update {
                                 it.copy(
                                     phase = UpdateUiState.Phase.Failed,
-                                    error = "Downloaded the update, but could not open the installer. " +
-                                        "Allow this app to install unknown apps, then try again.",
+                                    error = appContext.getString(R.string.settings_update_installer_failed),
                                 )
                             }
                         }
@@ -237,7 +242,10 @@ object Updater {
                     it.copy(
                         phase = UpdateUiState.Phase.Failed,
                         progress = null,
-                        error = e.message ?: "The download failed.",
+                        error = appContext.getString(
+                            R.string.settings_update_download_failed,
+                            e.message ?: e.javaClass.simpleName,
+                        ),
                     )
                 }
             }

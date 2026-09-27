@@ -114,6 +114,20 @@ android {
         buildConfig = true
     }
 
+    androidResources {
+        // Per-app language (Android 13+): AGP reads the values-* folders and
+        // generates the locale-config, and the system Settings page then offers
+        // this app's languages. On its own, a values-* folder only follows the
+        // *system* locale -- which is all that API 26..32 can do -- so this is
+        // what makes the language selectable per app on 13+.
+        //
+        // It requires a default locale, declared in res/resources.properties.
+        // Without that file the task fails rather than guessing, because a wrong
+        // guess silently changes which strings a device with an unlisted locale
+        // falls back to.
+        generateLocaleConfig = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

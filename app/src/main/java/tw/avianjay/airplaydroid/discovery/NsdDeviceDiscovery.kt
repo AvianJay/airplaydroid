@@ -87,12 +87,7 @@ class NsdDeviceDiscovery(
                 }
 
                 override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                    trySend(
-                        DiscoveryEvent.Failure(
-                            type,
-                            "Could not start " + type.label + " discovery (" + errorName(errorCode) + ")",
-                        )
-                    )
+                    trySend(DiscoveryEvent.Failure(type, errorName(errorCode)))
                 }
 
                 override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
@@ -150,7 +145,7 @@ class NsdDeviceDiscovery(
                 nsdManager.discoverServices(type.mdnsType, NsdManager.PROTOCOL_DNS_SD, listener)
                 started += listener
             } catch (t: Throwable) {
-                trySend(DiscoveryEvent.Failure(type, "Discovery unavailable: " + t.message))
+                trySend(DiscoveryEvent.Failure(type, t.message ?: t.javaClass.simpleName))
             }
         }
 

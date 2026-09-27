@@ -141,10 +141,12 @@ class MainActivity : MirrorHostActivity() {
                         onMirror = ::startMirroring,
                         onStopMirror = { MirrorController.stop(this) },
                         onForgetPairing = { pairings.forget(it.key) },
-                        onPlay = PlaybackController::play,
-                        onTogglePlayPause = PlaybackController::togglePlayPause,
+                        onPlay = { device, url, password ->
+                            PlaybackController.play(applicationContext, device, url, password)
+                        },
+                        onTogglePlayPause = { PlaybackController.togglePlayPause(applicationContext) },
                         onStop = PlaybackController::stop,
-                        onSubmitPin = PlaybackController::submitPin,
+                        onSubmitPin = { PlaybackController.submitPin(applicationContext, it) },
                         onCancelPin = PlaybackController::cancelPin,
                         onRefused = { message ->
                             // Shown immediately: this is a local decision, no socket involved.
@@ -164,7 +166,9 @@ class MainActivity : MirrorHostActivity() {
                                         getString(R.string.add_address_added, device.displayName)
                                     )
                                 }.onFailure { e ->
-                                    snackbarHostState.showSnackbar(e.message ?: "No AirPlay receiver at $host:$port")
+                                    snackbarHostState.showSnackbar(
+                                        getString(R.string.add_address_failed, e.message ?: "$host:$port")
+                                    )
                                 }
                             }
                         },

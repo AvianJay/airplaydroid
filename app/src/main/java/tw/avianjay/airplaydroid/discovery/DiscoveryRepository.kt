@@ -129,7 +129,7 @@ object DiscoveryRepository {
             }
 
             is DiscoveryEvent.Failure -> _state.update {
-                it.copy(scanning = it.scanning - event.type, lastError = event.reason)
+                it.copy(scanning = it.scanning - event.type, lastError = event)
             }
 
             is DiscoveryEvent.ServiceResolved -> {

@@ -2,10 +2,12 @@ package tw.avianjay.airplaydroid.mirror
 
 import android.content.Context
 import android.content.Intent
+import androidx.annotation.StringRes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import tw.avianjay.airplaydroid.R
 import tw.avianjay.airplaydroid.protocol.AirPlayDevice
 import tw.avianjay.airplaydroid.protocol.MirrorTransport
 import tw.avianjay.airplaydroid.service.MirrorService
@@ -26,7 +28,8 @@ data class MirrorUiState(
 
 /** What tapping a device in the picker should do; decided without I/O. */
 sealed interface MirrorTap {
-    data class Refused(val message: String) : MirrorTap
+    /** [message] is a string resource that takes the tapped device's name. */
+    data class Refused(@param:StringRes val message: Int) : MirrorTap
     data class Busy(val current: AirPlayDevice) : MirrorTap
     data object AskPassword : MirrorTap
     data object Start : MirrorTap
@@ -52,7 +55,9 @@ object MirrorController {
         private set
 
     /**
-     * Why [device] cannot be mirrored to, or null if it can.
+     * Why [device] cannot be mirrored to, as a string resource that takes the
+     * device's name, or null if it can. A resource rather than text because
+     * this object has no Context: the screen that shows it does the wording.
      *
      * Two protocols reach this point, and which one applies is decided by whether
      * the receiver advertises HAP pairing -- not by its model name:
@@ -69,17 +74,17 @@ object MirrorController {
      * control at all (transient pairing), still needs a pairing flow that has not
      * been built for the HAP path; the legacy path has the same gap.
      */
-    fun refusalFor(device: AirPlayDevice, hasSavedPairing: Boolean): String? {
+    @StringRes
+    fun refusalFor(device: AirPlayDevice, hasSavedPairing: Boolean): Int? {
         val txt = device.airPlayTxt ?: return when {
             // An AirPort Express and similar speakers advertise only _raop._tcp:
             // their _airplay._tcp record is not late, it never comes.
-            device.raopTxt?.features?.supportsScreenMirroring == false ->
-                "${device.displayName} does not accept screen mirroring."
-            else -> "${device.displayName} has not been fully resolved yet."
+            device.raopTxt?.features?.supportsScreenMirroring == false -> R.string.mirror_refused_unsupported
+            else -> R.string.mirror_refused_unresolved
         }
-        if (!txt.features.supportsScreenMirroring) return "${device.displayName} does not accept screen mirroring."
-        if (txt.pairingBlocked) return "${device.displayName} only allows devices from its own Home."
-        if (device.videoEndpoint == null) return "No address for ${device.displayName} yet."
+        if (!txt.features.supportsScreenMirroring) return R.string.mirror_refused_unsupported
+        if (txt.pairingBlocked) return R.string.mirror_refused_home_only
+        if (device.videoEndpoint == null) return R.string.mirror_refused_no_address
         // No HAP pairing means the legacy protocol, which this app now speaks.
         // Nothing to refuse here: `usesLegacyPath` picks the transport.
         if (hasSavedPairing) return null

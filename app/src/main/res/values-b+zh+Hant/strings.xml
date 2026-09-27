@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Traditional Chinese (繁體中文).
+
+  A script-qualified folder (`b+zh+Hant`), not `values-zh-rTW`: the request is
+  for the *script*, and one folder then covers every Traditional Chinese region
+  (Taiwan, Hong Kong and Macau) instead of Taiwan alone. A device set to
+  zh-Hant-TW, zh-Hant-HK or zh-Hant-MO all resolve here.
+
+  Terminology follows what these platforms already use in Taiwan, so nothing
+  reads as a literal translation of the English:
+    mirror   = 鏡像      (Apple/Google Taiwan)
+    cast     = 投放      (Google Home)
+    network  = 網路      (Taiwan; 網絡 is Hong Kong)
+    settings = 設定
+    video    = 視訊 for the stream (視訊金鑰, 視訊編碼器),
+               影片 for a clip or its URL (影片網址)
+    Home     = 「家庭」  (Apple's Home app, whose members a receiver may be
+                          restricted to)
+  Product and protocol names (AirPlay, Wi-Fi, Android, GitHub, APK, HLS, mDNS,
+  VPN, PIN, FairPlay, HomeKit, `main`, `nightly`) stay in Latin script.
+
+  The error strings that end in a placeholder after a colon or in parentheses
+  get the protocol's own explanation there: an exception's message, or the
+  receiver's reason for ending a session. It is technical and English in every
+  language, so only the sentence around it is translated here.
+-->
+<resources>
+
+    <string name="picker_title">AirPlay 裝置</string>
+    <string name="picker_scanning">正在掃描區域網路…</string>
+    <string name="picker_empty_title">尚未找到 AirPlay 裝置</string>
+    <string name="picker_empty_body">請確認這支手機與接收器連上同一個 Wi-Fi 網路。部分路由器會阻擋無線與有線用戶端之間的 mDNS。</string>
+    <string name="picker_browsing">正在瀏覽 %1$s</string>
+    <string name="discovery_error">無法啟動 %1$s 探索（%2$s）</string>
+
+    <string name="device_resolving">正在解析…</string>
+    <string name="device_status_mirroring">鏡像中</string>
+    <string name="device_status_paired">已配對</string>
+    <string name="device_status_cannot_mirror">無法鏡像</string>
+    <string name="device_menu_description">%1$s 的更多選項</string>
+
+    <string name="badge_audio">音訊</string>
+    <string name="badge_video">影片</string>
+    <string name="badge_legacy">舊版</string>
+    <string name="badge_needs_pin">需要 PIN 碼</string>
+    <string name="badge_needs_password">需要密碼</string>
+    <string name="badge_pairing_blocked">禁止配對</string>
+    <string name="badge_busy">使用中</string>
+
+    <string name="play_dialog_title">在 %1$s 上播放</string>
+    <string name="play_dialog_url_label">影片網址</string>
+    <string name="play_dialog_password_label">AirPlay 密碼</string>
+    <string name="play_dialog_pin_label">電視上顯示的 PIN 碼</string>
+    <string name="play_dialog_hint">影片檔案或 HLS（.m3u8）串流的直接連結。接收器會自行取得內容——這支手機不會轉送影片。</string>
+    <string name="action_play">播放</string>
+    <string name="action_play_url">播放影片網址…</string>
+    <string name="action_pause">暫停</string>
+    <string name="action_resume">繼續播放</string>
+    <string name="action_stop">停止</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_pair">配對</string>
+    <string name="action_forget_pairing">清除配對</string>
+    <string name="action_forget">清除</string>
+    <string name="pin_dialog_title">與 %1$s 配對</string>
+    <string name="pin_dialog_body">接收器螢幕上正顯示一組 PIN 碼，請在此輸入。</string>
+    <string name="playback_connecting">正在連線…</string>
+    <string name="playback_loading">正在載入…</string>
+    <string name="playback_error_no_url">請先輸入影片網址。</string>
+    <string name="playback_refused_audio_only">%1$s 是僅支援音訊的接收器。</string>
+    <string name="playback_refused_home_only">%1$s 僅允許其所屬「家庭」中的裝置存取，因此永遠無法配對。</string>
+    <string name="playback_refused_no_address">尚未解析出 %1$s 的位址。</string>
+    <string name="playback_error_needs_password">%1$s 需要密碼。</string>
+    <string name="playback_error_password_rejected">%1$s 不接受該密碼。</string>
+    <string name="playback_error_connection_lost">與接收器的連線已中斷。</string>
+    <string name="playback_error_start">無法開始播放：%1$s</string>
+    <string name="playback_error_rate">無法變更播放狀態：%1$s</string>
+    <string name="playback_error_seek">無法跳至指定位置：%1$s</string>
+    <string name="playback_error_pairing">配對失敗：%1$s</string>
+
+    <string name="forget_dialog_title">要清除與 %1$s 的配對嗎？</string>
+    <string name="forget_dialog_body">若要再次鏡像到該裝置，這支手機必須重新輸入其 AirPlay 密碼進行配對。</string>
+
+    <string name="action_mirror">鏡像螢幕</string>
+    <string name="action_add_by_address">以位址新增</string>
+    <string name="action_add">新增</string>
+    <string name="action_settings">設定</string>
+    <string name="picker_menu_description">更多選項</string>
+    <string name="action_back">返回</string>
+
+    <string name="settings_title">設定</string>
+    <string name="settings_client_name_title">用戶端名稱</string>
+    <string name="settings_client_name_body">這支手機在接收器 AirPlay 清單中顯示的名稱，也是配對時使用的名稱。變更此名稱不會影響現有的配對。</string>
+    <string name="settings_client_name_label">名稱</string>
+    <string name="settings_client_name_reset">使用裝置名稱（%1$s）</string>
+    <string name="settings_keep_awake_title">鏡像時保持螢幕亮起</string>
+    <string name="settings_keep_awake_body">螢幕進入休眠後，Android 會停止產生畫面，導致接收器上的影像凍結。此選項會在鏡像期間保持螢幕亮起。</string>
+    <string name="settings_legacy_key_title">預設舊版視訊金鑰</string>
+    <string name="settings_legacy_key_body">適用於可連線但沒有畫面的 AirPlay 1 接收器。此設定會套用至所有尚未個別設定（可從裝置列的選單設定）的接收器。變更後將於下次連線時生效。</string>
+    <string name="settings_diagnostics_title">診斷</string>
+    <string name="settings_diagnostics_body">鏡像開始與結束的原因會寫入這裡。可用下列指令取出：\n\nadb shell run-as %1$s cat files/mirror-log.txt</string>
+    <string name="settings_diagnostics_unavailable">尚無記錄檔。第一次開始鏡像時才會建立。</string>
+
+    <string name="settings_updates_title">應用程式更新</string>
+    <string name="settings_updates_body">會檢查本專案 GitHub 版本發布中是否有更新的版本，下載 APK 後交由 Android 安裝程式處理。未經您確認不會安裝任何內容。</string>
+    <string name="settings_update_channel_off">關閉</string>
+    <string name="settings_update_channel_off_body">永不檢查更新。</string>
+    <string name="settings_update_channel_stable">穩定版</string>
+    <string name="settings_update_channel_stable_body">僅包含已標記的正式版本。</string>
+    <string name="settings_update_channel_nightly">每日建置版</string>
+    <string name="settings_update_channel_nightly_body">main 分支的每次建置，包含預先發行版。</string>
+    <string name="settings_update_installed">已安裝：%1$s（組建 %2$d）</string>
+    <string name="settings_update_installed_unknown">已安裝組建 %1$d</string>
+    <string name="settings_update_check">立即檢查</string>
+    <string name="settings_update_checking">正在檢查…</string>
+    <string name="settings_update_available">有 %1$s 版可供更新</string>
+    <string name="settings_update_available_with_size">有 %1$s 版可供更新 · %2$s</string>
+    <string name="settings_update_up_to_date">已是最新版本。</string>
+    <string name="settings_update_channel_off_note">更新已關閉。請選擇一個更新管道以檢查新版本。</string>
+    <string name="settings_update_no_stable">尚未發布穩定版。每日建置版可在 nightly 管道取得。</string>
+    <string name="settings_update_nothing_published">此管道尚未發布任何版本。</string>
+    <string name="settings_update_not_installable">已有更新的版本發布，但其版本編號無法讓 Android 覆蓋安裝目前版本。</string>
+    <string name="settings_update_download">下載並安裝</string>
+    <string name="settings_update_downloading">正在下載… %1$d%%</string>
+    <string name="settings_update_downloading_indeterminate">正在下載…</string>
+    <string name="settings_update_ready">已下載完成。Android 安裝程式應已開啟。</string>
+    <string name="settings_update_allow_install">允許安裝後重試</string>
+    <string name="settings_update_allow_install_body">Android 需要您的授權，本應用程式才能開啟安裝程式。開關位於剛剛開啟的頁面上。</string>
+    <string name="settings_update_open_release">開啟版本發布頁面</string>
+    <string name="settings_update_installer_failed">已下載更新，但無法開啟安裝程式。請允許本應用程式安裝不明應用程式，然後再試一次。</string>
+    <string name="settings_update_check_failed">無法檢查更新：%1$s</string>
+    <string name="settings_update_download_failed">下載失敗：%1$s</string>
+
+    <string name="add_address_title">以位址新增接收器</string>
+    <string name="add_address_body">適用於探索功能找不到的接收器：例如跨 VPN，或從模擬器連線到本機電腦（10.0.2.2）。</string>
+    <string name="add_address_host_label">主機名稱或 IP 位址</string>
+    <string name="add_address_port_label">連接埠</string>
+    <string name="add_address_added">已新增 %1$s</string>
+    <string name="add_address_failed">無法新增接收器：%1$s</string>
+    <string name="legacy_key_auto">視訊金鑰：自動</string>
+    <string name="legacy_key_raw">視訊金鑰：原始 FairPlay 金鑰</string>
+    <string name="legacy_key_mixed">視訊金鑰：與配對混合</string>
+    <string name="legacy_key_hint">可以連線但沒有畫面嗎？請變更此設定後重新鏡像。</string>
+    <string name="mirror_channel_name">螢幕鏡像</string>
+    <string name="mirror_notification_title">正在鏡像至 %1$s</string>
+    <string name="mirror_status_consent">正在等待螢幕擷取權限…</string>
+    <string name="mirror_status_pairing">正在配對…</string>
+    <string name="mirror_status_pin">請輸入電視上顯示的驗證碼</string>
+    <string name="mirror_status_connecting">正在連線…</string>
+    <string name="mirror_status_mirroring">正在鏡像您的螢幕</string>
+    <string name="mirror_password_title">鏡像至 %1$s</string>
+    <string name="mirror_password_body">請輸入接收器上設定的 AirPlay 密碼。密碼會儲存在這支手機中，方便下次使用。</string>
+    <string name="mirror_already_active">已正在鏡像至 %1$s，請先停止。</string>
+    <string name="mirror_error_password_rejected">%1$s 不接受該密碼。</string>
+    <string name="mirror_error_saved_password_rejected">%1$s 不接受已儲存的密碼。請再次點選並輸入目前的密碼。</string>
+    <string name="mirror_error_wants_password">%1$s 需要 AirPlay 密碼。請再次點選以輸入密碼。</string>
+    <string name="mirror_error_needs_password">%1$s 需要 AirPlay 密碼才能配對。</string>
+    <string name="mirror_error_wrong_code">驗證碼與 %1$s 上顯示的不符。請再次點選以重試。</string>
+    <string name="mirror_error_no_consent">未取得螢幕擷取權限。</string>
+    <string name="mirror_error_no_address">找不到 %1$s 的位址。</string>
+    <string name="mirror_error_refused">%1$s 拒絕了鏡像要求（%2$s）。</string>
+    <string name="mirror_error_pairing_failed">無法與 %1$s 配對：%2$s</string>
+    <string name="mirror_error_failed">無法鏡像至 %1$s：%2$s</string>
+    <string name="mirror_error_connection_ended">與 %1$s 的連線已結束：%2$s</string>
+    <string name="mirror_error_video_lost">視訊連線中斷：%1$s</string>
+    <string name="mirror_error_encoder_stopped">視訊編碼器已停止：%1$s</string>
+
+    <string name="mirror_refused_unsupported">%1$s 不接受螢幕鏡像。</string>
+    <string name="mirror_refused_unresolved">%1$s 尚未解析完成。</string>
+    <string name="mirror_refused_home_only">%1$s 只允許其所屬「家庭」中的裝置連線。</string>
+    <string name="mirror_refused_no_address">尚未取得 %1$s 的位址。</string>
+
+    <!-- The casting popup, opened from the Quick Settings tile. -->
+    <string name="popup_title">投放螢幕</string>
+    <string name="popup_open_app">開啟應用程式</string>
+    <string name="popup_close_description">關閉</string>
+    <string name="tile_label">投放螢幕</string>
+    <string name="tile_subtitle_idle">點選以選擇接收器</string>
+    <string name="tile_subtitle_active">鏡像中</string>
+</resources>

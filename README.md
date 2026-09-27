@@ -329,6 +329,52 @@ AGP 9 ships **built-in Kotlin**: `org.jetbrains.kotlin.android` must not be appl
 `:app`. App sources therefore live in `app/src/main/java/` (a guaranteed source root);
 `src/main/kotlin` is not, and the failure mode is a silent zero-source compile.
 
+## Languages
+
+English is the default. **Traditional Chinese (繁體中文)** lives in
+`app/src/main/res/values-b+zh+Hant/strings.xml`.
+
+That folder is *script*-qualified, not `values-zh-rTW`, and the difference is
+the whole point: `b+zh+Hant` covers every Traditional Chinese region at once.
+Measured on an emulator, `zh-TW`, `zh-HK` and `zh-MO` all resolve to it, while
+`zh-CN` (Simplified) falls back to English rather than being served Traditional
+text. `values-zh-rTW` would have matched Taiwan only and left Hong Kong and
+Macau on English.
+
+| | |
+|---|---|
+| **API 26–32** | The system locale decides. Nothing else can, because per-app language does not exist yet. |
+| **API 33+** | Android Settings → *Apps* → *AirPlayDroid* → *Language* offers English and 繁體中文. |
+
+The picker is not free: it needs `androidResources.generateLocaleConfig = true`
+in `app/build.gradle.kts`, which reads the `values-*` folders and generates
+`@xml/_generated_res_locale_config` into the manifest. That task **requires** a
+declared default locale, which is what `app/src/main/res/resources.properties`
+is for — without it the task fails rather than guessing, because a wrong guess
+silently changes what an unlisted locale falls back to.
+
+`app_name` and `badge_airplay2` are marked `translatable="false"`: they are
+names, the same in every language, and lint then does not demand a copy of them
+in each `values-*` folder.
+
+**Messages built at run time** are string resources too, formatted wherever a
+`Context` is at hand:
+
+- `MirrorService`, `Updater` and the activities format their own.
+- `PlaybackController` takes a `Context` in each call that can fail, as `Updater`
+  already did, and keeps the application context, never the caller's.
+- `MirrorController.refusalFor` has no `Context` to use, so it returns a
+  `@StringRes` that the screen formats with the device's name. Discovery
+  failures and the capability badges are likewise worded by the screen: the
+  badge text in `:protocol`'s `DeviceCapability.label` is English only.
+
+What a resource cannot translate is the detail from below — an exception's
+message, or a receiver's reason for ending a session. It comes from `:protocol`
+(which has no `android.*`) or from the update client, it is technical, and it is
+passed in as an argument, so only the sentence around it changes language:
+`無法鏡像至 %1$s：%2$s`. `mirror-log.txt` and logcat stay English on purpose,
+since they are read by whoever debugs a session, not shown on screen.
+
 ## Modules
 
 - **`:protocol`**: pure Kotlin/JVM, zero `android.*` imports, unit-testable in
