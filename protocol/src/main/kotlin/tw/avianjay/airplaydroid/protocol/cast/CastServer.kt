@@ -12,7 +12,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.util.concurrent.ConcurrentHashMap
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
 
@@ -25,14 +24,23 @@ import kotlin.concurrent.thread
  * when the receiver is limited to local senders -- is dropped without ever
  * reaching the protocol. See [LocalAddresses.isOwnAddress].
  *
+ * Each connection is handed the identity [identities] gives at that moment, and
+ * keeps it: the source rotates the short-lived certificate senders insist on,
+ * and a session must not change certificates halfway.
+ *
  * One thread per sender, blocking I/O. A handful of senders is the most a
  * receiver ever sees, and the protocol is request/response with a heartbeat
  * every few seconds, so threads are simpler than anything asynchronous and cost
  * nothing that matters.
+ *
+ * Refusals and failed handshakes are logged once per address a minute, not
+ * every time: on a big shared network, every phone that sees the advertisement
+ * probes the receiver, some every few seconds, and a line each would push
+ * everything else out of a size-capped log.
  */
 class CastServer(
     private val receiver: CastReceiver,
-    private val sslContext: SSLContext,
+    private val identities: () -> CastIdentity,
     private val accept: (InetAddress) -> Boolean = { true },
     private val log: (String) -> Unit = {},
 ) : Closeable {
@@ -40,6 +48,9 @@ class CastServer(
     private var server: ServerSocket? = null
     private val sockets = ConcurrentHashMap.newKeySet<Socket>()
     @Volatile private var closed = false
+
+    /** (what, address) -> when it was last logged and how many were left out since. */
+    private val quiet = ConcurrentHashMap<String, LongArray>()
 
     /**
      * Listens on [port], or on any free port if that one is taken, and returns
@@ -82,7 +93,7 @@ class CastServer(
             }
             val remote = socket.inetAddress
             if (!accept(remote)) {
-                log("refused a sender at ${remote.hostAddress}")
+                logQuietly("refused", remote.hostAddress) { "refused a sender at ${remote.hostAddress}" }
                 runCatching { socket.close() }
                 continue
             }
@@ -93,21 +104,29 @@ class CastServer(
 
     private fun serve(plain: Socket) {
         val remote = plain.inetAddress.hostAddress
+        val identity = try {
+            identities()
+        } catch (e: Exception) {
+            log("no identity to present: $e")
+            sockets -= plain
+            runCatching { plain.close() }
+            return
+        }
         val tls = try {
-            (sslContext.socketFactory.createSocket(plain, remote, plain.port, true) as SSLSocket).apply {
+            (identity.sslContext.socketFactory.createSocket(plain, remote, plain.port, true) as SSLSocket).apply {
                 useClientMode = false
                 soTimeout = READ_TIMEOUT_MS
                 startHandshake()
             }
         } catch (e: IOException) {
-            log("TLS handshake with $remote failed: $e")
+            logQuietly("handshake", remote) { "TLS handshake with $remote failed: $e" }
             sockets -= plain
             runCatching { plain.close() }
             return
         }
         sockets += tls
-        val channel = SocketChannel(tls.outputStream)
-        log("sender connected from $remote")
+        val channel = SocketChannel(tls.outputStream, identity)
+        log("sender connected from $remote (${tls.session.protocol}, ${tls.session.cipherSuite})")
         try {
             val input = BufferedInputStream(tls.inputStream)
             while (!closed) {
@@ -129,7 +148,26 @@ class CastServer(
         }
     }
 
-    private class SocketChannel(private val output: OutputStream) : CastChannel {
+    /** Logs [message] unless the same kind of event from [address] was logged in the last minute. */
+    private fun logQuietly(kind: String, address: String, message: () -> String) {
+        val now = System.currentTimeMillis()
+        val entry = quiet.getOrPut("$kind $address") { longArrayOf(0, 0) }
+        synchronized(entry) {
+            if (now - entry[0] < QUIET_MS) {
+                entry[1]++
+                return
+            }
+            val skipped = entry[1]
+            entry[0] = now
+            entry[1] = 0
+            log(message() + if (skipped > 0) " ($skipped more like it in the last minute)" else "")
+        }
+    }
+
+    private class SocketChannel(
+        private val output: OutputStream,
+        override val tlsIdentity: CastIdentity,
+    ) : CastChannel {
         override fun send(message: CastMessage) {
             synchronized(this) { CastMessage.write(output, message) }
         }
@@ -140,5 +178,7 @@ class CastServer(
 
         /** Senders ping every 5 s; three missed pings is a sender that is gone. */
         private const val READ_TIMEOUT_MS = 20_000
+
+        private const val QUIET_MS = 60_000L
     }
 }

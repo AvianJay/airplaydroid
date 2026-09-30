@@ -93,6 +93,13 @@ interface CastPlayer {
 /** One sender's TCP connection, as the receiver writes to it. Implementations serialise [send]. */
 interface CastChannel {
     fun send(message: CastMessage)
+
+    /**
+     * The identity this connection's TLS handshake presented. Device auth must
+     * sign that certificate and no other, and the server rotates identities, so
+     * the connection is what remembers which one it got.
+     */
+    val tlsIdentity: CastIdentity? get() = null
 }
 
 /**
@@ -116,6 +123,7 @@ interface CastChannel {
  * that calls back in cannot deadlock the receiver.
  */
 class CastReceiver(
+    /** Signs device auth on a channel that does not know its own TLS identity (tests, mostly). */
     private val identity: CastIdentity,
     private val player: CastPlayer,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -263,8 +271,12 @@ class CastReceiver(
     private fun onDeviceAuth(channel: CastChannel, message: CastMessage, effects: Effects) {
         val challenge = message.payloadBinary?.let { runCatching { DeviceAuth.parseChallenge(it) }.getOrNull() }
             ?: return log("device auth: not a challenge")
-        val certificate = identity.certificateDer
-        val signature = identity.sign(DeviceAuth.signedData(challenge, certificate), challenge.hashAlgorithm)
+        val signer = channel.tlsIdentity ?: identity
+        val certificate = signer.certificateDer
+        val signature = signer.sign(DeviceAuth.signedData(challenge, certificate), challenge.hashAlgorithm)
+        // Worth a line: a sender that disconnects right after this rejected the
+        // answer, which is what every Google Cast SDK sender does (see DeviceAuth).
+        log("answered a device-auth challenge from ${message.sourceId} (${challenge.hashAlgorithm})")
         effects.messages += channel to CastMessage(
             sourceId = message.destinationId,
             destinationId = message.sourceId,

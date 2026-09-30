@@ -13,7 +13,6 @@ import org.bouncycastle.asn1.x509.Time
 import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
 import java.io.ByteArrayInputStream
 import java.math.BigInteger
-import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -21,8 +20,6 @@ import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
-import java.security.spec.PKCS8EncodedKeySpec
-import java.util.Base64
 import java.util.Date
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
@@ -35,14 +32,24 @@ import javax.net.ssl.SSLContext
  * separate device-auth signature ([DeviceAuth]); this key signs that as well,
  * which is as far as an app without a Google-issued device key can go.
  *
+ * **The certificate is short-lived on purpose.** Senders refuse a self-signed
+ * TLS certificate valid for more than a few days -- Chromium's Cast code caps
+ * it at four (`kMaxSelfSignedCertLifetimeInDays`), a real Chromecast issues a
+ * new one every day or two -- and they refuse it by closing the connection in
+ * the middle of the handshake, with no alert and no error on either side. The
+ * first version of this class issued one valid for twenty years; every sender
+ * on a phone did exactly that, every three seconds. [VALIDITY_MS] is therefore
+ * 48 hours, and [CastIdentitySource] replaces the identity well before that.
+ *
  * The certificate is built from BouncyCastle's ASN.1 classes and signed through
  * the JCA, because the certificate *builder* lives in `bcpkix`, a second
- * dependency for one call. Kept for as long as the app keeps it -- see [encode]
- * -- so a sender that remembers the receiver's certificate sees the same one.
+ * dependency for one call.
  */
 class CastIdentity private constructor(
     val privateKey: PrivateKey,
     val certificate: X509Certificate,
+    /** When it was made, on the clock [generate] was given. */
+    val createdAt: Long,
 ) {
     /** The certificate in DER, which is also what the device-auth signature covers. */
     val certificateDer: ByteArray get() = certificate.encoded
@@ -55,12 +62,12 @@ class CastIdentity private constructor(
         }
 
     /**
-     * A server-side TLS context presenting this certificate.
+     * A server-side TLS context presenting this certificate, built once.
      *
      * A PKCS#12 key store because it is the one in-memory type both the desktop
      * JVM and Android provide; the key never touches disk through it.
      */
-    fun sslContext(): SSLContext {
+    val sslContext: SSLContext by lazy {
         val password = CharArray(0)
         val store = KeyStore.getInstance("PKCS12").apply {
             load(null, null)
@@ -69,40 +76,36 @@ class CastIdentity private constructor(
         val keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
             init(store, password)
         }.keyManagers
-        return SSLContext.getInstance("TLS").apply { init(keyManagers, null, null) }
-    }
-
-    /** Two base64 lines: the PKCS#8 key, then the DER certificate. Read back with [decode]. */
-    fun encode(): String {
-        val encoder = Base64.getEncoder()
-        return encoder.encodeToString(privateKey.encoded) + "\n" + encoder.encodeToString(certificateDer) + "\n"
+        SSLContext.getInstance("TLS").apply { init(keyManagers, null, null) }
     }
 
     companion object {
         private const val ALIAS = "cast"
         private const val KEY_BITS = 2048
 
+        /** How long a certificate is valid: what a Chromecast issues, and half the senders' limit. */
+        const val VALIDITY_MS = 48L * 60 * 60 * 1000
+
         /**
-         * Long enough that an installed receiver never has to rotate it. Senders
-         * that honour validity at all only look at the device-auth certificate,
-         * which is this one, and they reject it for its issuer regardless.
+         * How far notBefore is set back, so a sender whose clock runs a little
+         * behind does not see a certificate from the future. Counted inside
+         * [VALIDITY_MS], never on top of it.
          */
-        private const val VALIDITY_MS = 20L * 365 * 24 * 60 * 60 * 1000
+        const val BACKDATE_MS = 60L * 60 * 1000
 
         fun generate(commonName: String, now: Long = System.currentTimeMillis()): CastIdentity {
             val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(KEY_BITS, SecureRandom()) }
                 .generateKeyPair()
             val signatureAlgorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
             val name = X500Name("CN=" + commonName.replace(Regex("[,+=\"\\\\<>;#]"), " ").trim().ifEmpty { "Cast" })
+            val notBefore = now - BACKDATE_MS
 
             val tbs = V3TBSCertificateGenerator().apply {
                 setSerialNumber(ASN1Integer(BigInteger(63, SecureRandom())))
                 setIssuer(name)
                 setSubject(name)
-                // Backdated a day: a sender whose clock is a little behind must not
-                // see a certificate from the future.
-                setStartDate(Time(Date(now - 24L * 60 * 60 * 1000)))
-                setEndDate(Time(Date(now + VALIDITY_MS)))
+                setStartDate(Time(Date(notBefore)))
+                setEndDate(Time(Date(notBefore + VALIDITY_MS)))
                 setSignature(signatureAlgorithm)
                 setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keys.public.encoded))
             }.generateTBSCertificate()
@@ -119,19 +122,43 @@ class CastIdentity private constructor(
                     add(DERBitString(signature))
                 }
             ).encoded
-            return CastIdentity(keys.private, parseCertificate(der))
+            val certificate = CertificateFactory.getInstance("X.509")
+                .generateCertificate(ByteArrayInputStream(der)) as X509Certificate
+            return CastIdentity(keys.private, certificate, now)
         }
+    }
+}
 
-        /** The inverse of [encode]; null when the text is not a stored identity. */
-        fun decode(text: String): CastIdentity? = runCatching {
-            val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
-            if (lines.size != 2) return null
-            val decoder = Base64.getDecoder()
-            val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(decoder.decode(lines[0])))
-            CastIdentity(key, parseCertificate(decoder.decode(lines[1])))
-        }.getOrNull()
+/**
+ * The identity to present on the next connection, replaced before it gets old.
+ *
+ * [ROTATE_AFTER_MS] is 20 hours: well inside the 48-hour validity, and inside
+ * the "made in the last day" that some senders are reported to expect, even for
+ * a sender whose clock is a few hours ahead. A connection keeps the identity it
+ * was accepted with (see [CastChannel.tlsIdentity]), so replacing it never pulls
+ * a certificate out from under a session in progress.
+ *
+ * Generating a 2048-bit RSA key takes up to a second on a phone; that happens
+ * on the thread that asks, once a day, and [prepare] does the first one ahead of
+ * time.
+ */
+class CastIdentitySource(
+    private val commonName: String,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private var identity: CastIdentity? = null
 
-        private fun parseCertificate(der: ByteArray): X509Certificate =
-            CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(der)) as X509Certificate
+    @Synchronized
+    fun current(): CastIdentity {
+        val now = clock()
+        identity?.takeIf { now - it.createdAt in 0 until ROTATE_AFTER_MS }?.let { return it }
+        return CastIdentity.generate(commonName, now).also { identity = it }
+    }
+
+    /** Makes the first identity now, so the first sender does not wait for it. */
+    fun prepare(): CastIdentity = current()
+
+    companion object {
+        const val ROTATE_AFTER_MS = 20L * 60 * 60 * 1000
     }
 }

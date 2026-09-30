@@ -27,7 +27,7 @@ import tw.avianjay.airplaydroid.MainActivity
 import tw.avianjay.airplaydroid.R
 import tw.avianjay.airplaydroid.mirror.MirrorLog
 import tw.avianjay.airplaydroid.protocol.cast.CastDeviceInfo
-import tw.avianjay.airplaydroid.protocol.cast.CastIdentity
+import tw.avianjay.airplaydroid.protocol.cast.CastIdentitySource
 import tw.avianjay.airplaydroid.protocol.cast.CastReceiver
 import tw.avianjay.airplaydroid.protocol.cast.CastServer
 import tw.avianjay.airplaydroid.protocol.cast.LocalAddresses
@@ -126,13 +126,16 @@ class CastReceiverService : Service(), CastBridge.Host {
 
     private fun startServers() {
         try {
-            val identity = loadIdentity()
+            // The certificate lives for two days and is replaced daily: senders
+            // refuse a long-lived one. Made fresh on every start, never stored.
+            File(noBackupFilesDir, LEGACY_IDENTITY_FILE).delete()
+            val identities = CastIdentitySource("AirPlayDroid")
             val info = CastDeviceInfo(id = loadDeviceId(), friendlyName = settings.clientName())
-            val receiver = CastReceiver(identity, CastBridge, log = { MirrorLog.write("cast: $it") })
+            val receiver = CastReceiver(identities.prepare(), CastBridge, log = { MirrorLog.write("cast: $it") })
             // Read on every connection, so switching "only this phone" takes effect at once.
             val server = CastServer(
                 receiver = receiver,
-                sslContext = identity.sslContext(),
+                identities = identities::current,
                 accept = { address -> !settings.state.value.cast.localOnly || LocalAddresses.isOwnAddress(address) },
                 log = { MirrorLog.write("cast: $it") },
             )
@@ -196,15 +199,6 @@ class CastReceiverService : Service(), CastBridge.Host {
     }
 
     // ------------------------------------------------------------ identity
-
-    /** Kept for good, so a sender that remembers this receiver's certificate sees the same one. */
-    private fun loadIdentity(): CastIdentity {
-        val file = File(noBackupFilesDir, IDENTITY_FILE)
-        runCatching { CastIdentity.decode(file.readText()) }.getOrNull()?.let { return it }
-        return CastIdentity.generate("AirPlayDroid").also { identity ->
-            runCatching { file.writeText(identity.encode()) }
-        }
-    }
 
     /** Senders key their device lists on the id; a new one each start would list this phone twice. */
     private fun loadDeviceId(): String {
@@ -330,7 +324,8 @@ class CastReceiverService : Service(), CastBridge.Host {
         private const val REQUEST_NOTIFICATION_ID = 4
         private const val ACTION_STOP_CAST = "tw.avianjay.airplaydroid.action.STOP_CAST"
         private const val ACTION_TURN_OFF = "tw.avianjay.airplaydroid.action.CAST_OFF"
-        private const val IDENTITY_FILE = "cast-identity"
+        /** Where the first version kept a twenty-year certificate senders refused; removed on sight. */
+        private const val LEGACY_IDENTITY_FILE = "cast-identity"
         private const val DEVICE_ID_FILE = "cast-device-id"
     }
 }

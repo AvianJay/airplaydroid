@@ -226,6 +226,22 @@ Senders that do not check the chain connect: **VLC** and **pychromecast** were
 tested; BubbleUPnP and other open implementations should behave the same, but
 were not tried.
 
+**The TLS certificate must be short-lived**, and this is checked before any of
+the above. Senders refuse a self-signed certificate valid for more than a few
+days (Chromium's `kMaxSelfSignedCertLifetimeInDays` is 4; a Chromecast issues
+one for about 48 hours) by closing the connection in the middle of the
+handshake -- no alert, no error, just `SSLHandshakeException: connection closed`
+on the receiver and "connected, then disconnected" in the sender. The first
+build issued a twenty-year certificate and every sender on the phone did exactly
+that, every three seconds. `CastIdentitySource` now issues 48-hour certificates,
+replaces them after 20 hours, and each connection signs device auth with the
+certificate its own handshake used.
+
+In `mirror-log.txt`, a sender that gets this far logs `sender connected from …`
+and then `answered a device-auth challenge`; one that disconnects right after
+that has rejected the device-auth answer, which is where a Google Cast SDK
+sender stops.
+
 ### How a LOAD reaches the AirPlay receiver
 
 `AirPlayFormats.route` decides, from the URL and the content type the sender
@@ -279,7 +295,10 @@ Wi-Fi address, so its connection arrives **from** that Wi-Fi address, not from
 `127.0.0.1`. `LocalAddresses.isOwnAddress` therefore accepts loopback and any
 address bound to one of the phone's interfaces, and nothing else. The receiver
 is still advertised to the whole network, because mDNS cannot be limited to one
-host; other devices see it and are refused.
+host; other devices see it and are refused. On a large shared network that is a
+lot of devices: the first field log came from a school network where 116 phones
+probed the receiver within three minutes. Each address's refusals are logged
+once a minute, so they cannot push everything else out of the log.
 
 ### What is verified, and what is not
 

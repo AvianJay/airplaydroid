@@ -1,7 +1,7 @@
 package tw.avianjay.airplaydroid.protocol.devtools
 
 import tw.avianjay.airplaydroid.protocol.cast.CastDeviceInfo
-import tw.avianjay.airplaydroid.protocol.cast.CastIdentity
+import tw.avianjay.airplaydroid.protocol.cast.CastIdentitySource
 import tw.avianjay.airplaydroid.protocol.cast.CastLoadRequest
 import tw.avianjay.airplaydroid.protocol.cast.CastPlayer
 import tw.avianjay.airplaydroid.protocol.cast.CastPlayerState
@@ -54,12 +54,12 @@ object CastReceiverProbe {
             override fun onSessionEnded() = println("PLAYER session ended")
             override fun onVolume(level: Double, muted: Boolean) = println("PLAYER volume $level muted=$muted")
         }
-        // One identity for both: the device-auth signature covers the TLS certificate.
-        val identity = CastIdentity.generate(device.friendlyName)
-        receiver = CastReceiver(identity, player, log = { println("RECV $it") })
+        // Each connection signs device auth with the identity its handshake used.
+        val identities = CastIdentitySource(device.friendlyName)
+        receiver = CastReceiver(identities.prepare(), player, log = { println("RECV $it") })
         val server = CastServer(
             receiver = receiver,
-            sslContext = identity.sslContext(),
+            identities = identities::current,
             accept = { address -> !localOnly || LocalAddresses.isOwnAddress(address) },
             log = { println("SERVER $it") },
         )
