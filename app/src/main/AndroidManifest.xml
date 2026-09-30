@@ -32,6 +32,20 @@
          missing rather than failing silently. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- The Chromecast receiver. Its service is a connectedDevice foreground
+         service: a network service other devices connect to. From Android 14
+         that type requires one of a short list of permissions to be declared;
+         CHANGE_WIFI_MULTICAST_STATE is the one that describes what it does, since
+         senders find it over mDNS. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Only acted on when "keep running in the background" is on. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- "Display over other apps": the one way the Cast chooser may open over the
+         sender app on its own. Granted by the user in Settings, never assumed;
+         without it the chooser is reached from a notification. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- Declared required=false so the Play Console does not implicitly filter the
          app to Wi-Fi-capable devices only. -->
     <uses-feature
@@ -71,6 +85,37 @@
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:theme="@style/Theme.AirPlayDroid.Popup" />
+
+        <!-- The Cast chooser: which AirPlay receiver a cast plays on. Like the
+             popup above, but taskAffinity="" puts it in a task of its own, so it
+             opens over the sender app instead of bringing this app's task (and
+             the picker in it) to the front. -->
+        <activity
+            android:name=".CastTargetActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.AirPlayDroid.Popup" />
+
+        <!-- The Chromecast receiver. Started and stopped by CastReceiverController. -->
+        <service
+            android:name=".cast.CastReceiverService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Restarts the receiver after a reboot or an update, when it is set to
+             keep running. The system delivers these broadcasts to a receiver that
+             is not exported. -->
+        <receiver
+            android:name=".cast.CastBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- The Quick Settings tile. Exported, and it must be: the SystemUI
              process binds it to render the tile, and android:icon is what the

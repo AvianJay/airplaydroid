@@ -23,6 +23,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tw.avianjay.airplaydroid.cast.CastReceiverController
 import tw.avianjay.airplaydroid.discovery.DiscoveryRepository
 import tw.avianjay.airplaydroid.mirror.LegacyVideoKeyStore
 import tw.avianjay.airplaydroid.mirror.MirrorController
@@ -62,6 +63,7 @@ class MainActivity : MirrorHostActivity() {
                 val legacyKeyRevision by LegacyVideoKeyStore.revision.collectAsStateWithLifecycle()
                 val settings by settingsStore.state.collectAsStateWithLifecycle()
                 val updateState by Updater.state.collectAsStateWithLifecycle()
+                val castStatus by CastReceiverController.status.collectAsStateWithLifecycle()
                 val snackbarHostState = remember { SnackbarHostState() }
                 var showSettings by rememberSaveable { mutableStateOf(false) }
 
@@ -122,6 +124,19 @@ class MainActivity : MirrorHostActivity() {
                         onKeepScreenAwake = settingsStore::setKeepScreenAwake,
                         onDefaultLegacyKeySeed = settingsStore::setDefaultLegacyKeySeed,
                         onUpdateChannel = settingsStore::setUpdateChannel,
+                        castStatus = castStatus,
+                        // Either switch can change whether the receiver should be running.
+                        onCastEnabled = {
+                            settingsStore.setCastEnabled(it)
+                            CastReceiverController.update(this)
+                        },
+                        onCastKeepRunning = {
+                            settingsStore.setCastKeepRunning(it)
+                            CastReceiverController.update(this)
+                        },
+                        onCastAskForDevice = settingsStore::setCastAskForDevice,
+                        onCastConvertFormats = settingsStore::setCastConvertFormats,
+                        onCastLocalOnly = settingsStore::setCastLocalOnly,
                         updateState = updateState,
                         onCheckForUpdates = {
                             Updater.check(applicationContext, settings.updateChannel)

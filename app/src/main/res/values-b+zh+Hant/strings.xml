@@ -177,4 +177,46 @@
     <string name="tile_label">投放螢幕</string>
     <string name="tile_subtitle_idle">點選以選擇接收器</string>
     <string name="tile_subtitle_active">鏡像中</string>
+    <!-- The Chromecast receiver: this phone as a Cast device, forwarding to AirPlay. -->
+    <string name="settings_cast_title">Chromecast 接收器</string>
+    <string name="settings_cast_body">讓應用程式把這支手機當成 Chromecast 投放，並將投放的內容轉到 AirPlay 接收器上播放。以 Google Cast SDK 開發的傳送端（YouTube、Chrome 與大多數串流應用程式）會驗證接收器是否為 Google 正版硬體，因此無法連線；VLC、BubbleUPnP 等開放式傳送端則可以。</string>
+    <string name="settings_cast_enabled_title">模擬 Chromecast</string>
+    <string name="settings_cast_enabled_body">已關閉。這支手機或網路上的傳送端都看不到它。</string>
+    <string name="settings_cast_status_starting">正在啟動…</string>
+    <string name="settings_cast_status_listening">正在連接埠 %1$d 上等待連線。</string>
+    <string name="settings_cast_status_failed">無法啟動：%1$s</string>
+    <string name="settings_cast_keep_running_title">常駐背景執行</string>
+    <string name="settings_cast_keep_running_body">關閉應用程式後仍可被投放，重新開機後也會自動啟動，執行期間會顯示通知。關閉時：僅在應用程式開啟期間可用，並持續到已接受的投放結束為止。</string>
+    <string name="settings_cast_ask_title">連線時詢問要在哪台接收器播放</string>
+    <string name="settings_cast_ask_body">每次有傳送端連線時，列出 AirPlay 接收器讓你選擇。關閉時：直接投放到上次選擇的接收器。</string>
+    <string name="settings_cast_overlay_body">選擇視窗需要「顯示在其他應用程式上層」權限，才能直接跳出在正在投放的應用程式上方；未授權時會改以通知詢問。</string>
+    <string name="settings_cast_overlay_allow">允許顯示在其他應用程式上層</string>
+    <string name="settings_cast_convert_title">轉換 AirPlay 無法播放的格式</string>
+    <string name="settings_cast_convert_body">WebM、Matroska、Ogg、FLAC 等格式會在播放時由這支手機即時重新編碼為 H.264 與 AAC。會耗用處理器與電力；DASH 無法轉換。</string>
+    <string name="settings_cast_local_only_title">僅允許這支手機上的應用程式</string>
+    <string name="settings_cast_local_only_body_on">網路上的其他裝置看得到這台接收器，但連線會被拒絕。</string>
+    <string name="settings_cast_local_only_body_off">同一網路上的任何人都能透過這支手機投放到你的 AirPlay 接收器。</string>
+
+    <string name="cast_channel_name">Chromecast 接收器</string>
+    <string name="cast_request_channel_name">投放請求</string>
+    <string name="cast_notification_title">Chromecast 接收器已開啟</string>
+    <string name="cast_notification_choosing">有傳送端正在等你選擇接收器</string>
+    <string name="cast_notification_casting">正在將 %1$s 投放到 %2$s</string>
+    <string name="cast_untitled">媒體</string>
+    <string name="cast_notification_body">網路上的傳送端會看到這支手機名為「%1$s」。</string>
+    <string name="cast_notification_body_local">這支手機上的應用程式會看到它名為「%1$s」。</string>
+    <string name="cast_action_stop">停止投放</string>
+    <string name="cast_action_turn_off">關閉</string>
+    <string name="cast_request_title">選擇播放位置</string>
+    <string name="cast_request_body">有傳送端正在投放到這支手機，點選以選擇 AirPlay 接收器。</string>
+    <string name="cast_request_body_titled">點選以選擇要播放「%1$s」的 AirPlay 接收器。</string>
+
+    <string name="cast_chooser_title">在 AirPlay 上播放</string>
+    <string name="cast_chooser_subtitle">有傳送端正在投放到這支手機</string>
+    <string name="cast_chooser_subtitle_titled">正在投放「%1$s」</string>
+    <string name="cast_chooser_cancel">取消投放</string>
+    <string name="cast_status_converting">正在轉換為 AirPlay 格式…</string>
+    <string name="cast_password_title">在 %1$s 上播放</string>
+    <string name="cast_error_target_missing">找不到上次投放的接收器 %1$s。</string>
+    <string name="cast_error_convert">無法轉換此媒體：%1$s</string>
 </resources>

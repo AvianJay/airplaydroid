@@ -1,5 +1,6 @@
 package tw.avianjay.airplaydroid.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -76,12 +77,17 @@ fun PinDialog(
     )
 }
 
-/** Asked only when the receiver wants a password and none is saved for it. */
+/**
+ * Asked only when the receiver wants a password and none is saved for it. The
+ * Cast chooser asks with it too, under its own title and button.
+ */
 @Composable
 fun MirrorPasswordDialog(
     device: AirPlayDevice,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
+    @StringRes titleRes: Int = R.string.mirror_password_title,
+    @StringRes confirmRes: Int = R.string.action_mirror,
 ) {
     // Plain remember, not rememberSaveable: the secret must not be written into
     // the saved-state Bundle, and configChanges already keeps it across rotation.
@@ -90,7 +96,7 @@ fun MirrorPasswordDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.mirror_password_title, device.displayName)) },
+        title = { Text(stringResource(titleRes, device.displayName)) },
         text = {
             Column {
                 Text(
@@ -117,7 +123,7 @@ fun MirrorPasswordDialog(
         },
         confirmButton = {
             TextButton(onClick = { onConfirm(password) }, enabled = password.isNotEmpty()) {
-                Text(stringResource(R.string.action_mirror))
+                Text(stringResource(confirmRes))
             }
         },
         dismissButton = {

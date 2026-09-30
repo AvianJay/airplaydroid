@@ -54,10 +54,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import tw.avianjay.airplaydroid.BuildConfig
 import tw.avianjay.airplaydroid.R
+import tw.avianjay.airplaydroid.cast.CastReceiverController
 import tw.avianjay.airplaydroid.mirror.MirrorLog
 import tw.avianjay.airplaydroid.protocol.mirror.LegacyRtspMirrorSession.KeySeed
 import tw.avianjay.airplaydroid.protocol.update.UpdateChannel
 import tw.avianjay.airplaydroid.protocol.update.UpdateOutcome
+import tw.avianjay.airplaydroid.settings.CastSettings
 import tw.avianjay.airplaydroid.settings.Settings
 import tw.avianjay.airplaydroid.settings.SettingsStore
 import tw.avianjay.airplaydroid.update.ApkInstaller
@@ -79,6 +81,12 @@ fun SettingsScreen(
     onKeepScreenAwake: (Boolean) -> Unit,
     onDefaultLegacyKeySeed: (KeySeed) -> Unit,
     onUpdateChannel: (UpdateChannel) -> Unit,
+    castStatus: CastReceiverController.Status,
+    onCastEnabled: (Boolean) -> Unit,
+    onCastKeepRunning: (Boolean) -> Unit,
+    onCastAskForDevice: (Boolean) -> Unit,
+    onCastConvertFormats: (Boolean) -> Unit,
+    onCastLocalOnly: (Boolean) -> Unit,
     updateState: UpdateUiState,
     onCheckForUpdates: () -> Unit,
     onInstallUpdate: () -> Unit,
@@ -126,6 +134,18 @@ fun SettingsScreen(
             LegacyKeySection(
                 selected = settings.defaultLegacyKeySeed,
                 onSelect = onDefaultLegacyKeySeed,
+            )
+
+            HorizontalDivider()
+
+            CastSection(
+                cast = settings.cast,
+                status = castStatus,
+                onEnabled = onCastEnabled,
+                onKeepRunning = onCastKeepRunning,
+                onAskForDevice = onCastAskForDevice,
+                onConvertFormats = onCastConvertFormats,
+                onLocalOnly = onCastLocalOnly,
             )
 
             HorizontalDivider()
@@ -213,11 +233,12 @@ private fun SwitchRow(
     body: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     ListItem(
         // The whole row toggles: the switch is a small target, and the text is
         // the larger, more obvious one.
-        modifier = Modifier.clickable(role = Role.Switch) { onCheckedChange(!checked) },
+        modifier = Modifier.clickable(enabled = enabled, role = Role.Switch) { onCheckedChange(!checked) },
         headlineContent = { Text(title) },
         supportingContent = {
             Text(body, style = MaterialTheme.typography.bodySmall)
@@ -228,9 +249,121 @@ private fun SwitchRow(
                 // null: the row above already handles the click, and a switch
                 // with its own handler would toggle twice.
                 onCheckedChange = null,
+                enabled = enabled,
             )
         },
     )
+}
+
+/**
+ * The Chromecast receiver: one switch to turn it on, four for how it behaves.
+ *
+ * The four stay visible while it is off, greyed out, so what turning it on
+ * would do can be read before doing it.
+ */
+@Composable
+private fun CastSection(
+    cast: CastSettings,
+    status: CastReceiverController.Status,
+    onEnabled: (Boolean) -> Unit,
+    onKeepRunning: (Boolean) -> Unit,
+    onAskForDevice: (Boolean) -> Unit,
+    onConvertFormats: (Boolean) -> Unit,
+    onLocalOnly: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    // Re-read on resume: the user may have just granted it on the page this row opened.
+    var canOverlay by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) canOverlay = android.provider.Settings.canDrawOverlays(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            Text(
+                text = stringResource(R.string.settings_cast_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.settings_cast_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        SwitchRow(
+            title = stringResource(R.string.settings_cast_enabled_title),
+            body = when {
+                !cast.enabled -> stringResource(R.string.settings_cast_enabled_body)
+                status is CastReceiverController.Status.Listening ->
+                    stringResource(R.string.settings_cast_status_listening, status.port)
+                status is CastReceiverController.Status.Failed ->
+                    stringResource(R.string.settings_cast_status_failed, status.reason)
+                else -> stringResource(R.string.settings_cast_status_starting)
+            },
+            checked = cast.enabled,
+            onCheckedChange = onEnabled,
+        )
+        SwitchRow(
+            title = stringResource(R.string.settings_cast_keep_running_title),
+            body = stringResource(R.string.settings_cast_keep_running_body),
+            checked = cast.keepRunning,
+            onCheckedChange = onKeepRunning,
+            enabled = cast.enabled,
+        )
+        SwitchRow(
+            title = stringResource(R.string.settings_cast_ask_title),
+            body = stringResource(R.string.settings_cast_ask_body),
+            checked = cast.askForDevice,
+            onCheckedChange = onAskForDevice,
+            enabled = cast.enabled,
+        )
+        // Without it the chooser cannot open over the sender app; a notification asks instead.
+        if (cast.enabled && cast.askForDevice && !canOverlay) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_cast_overlay_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    ("package:" + context.packageName).toUri(),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.settings_cast_overlay_allow))
+                }
+            }
+        }
+        SwitchRow(
+            title = stringResource(R.string.settings_cast_convert_title),
+            body = stringResource(R.string.settings_cast_convert_body),
+            checked = cast.convertFormats,
+            onCheckedChange = onConvertFormats,
+            enabled = cast.enabled,
+        )
+        SwitchRow(
+            title = stringResource(R.string.settings_cast_local_only_title),
+            body = stringResource(
+                if (cast.localOnly) R.string.settings_cast_local_only_body_on else R.string.settings_cast_local_only_body_off
+            ),
+            checked = cast.localOnly,
+            onCheckedChange = onLocalOnly,
+            enabled = cast.enabled,
+        )
+    }
 }
 
 /** One radio row per seed. The labels are the picker's own, so they match the row menu. */

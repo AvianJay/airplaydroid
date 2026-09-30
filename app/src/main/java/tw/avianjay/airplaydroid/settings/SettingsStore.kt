@@ -6,6 +6,7 @@ import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import tw.avianjay.airplaydroid.protocol.mirror.LegacyRtspMirrorSession.KeySeed
 import tw.avianjay.airplaydroid.protocol.update.UpdateChannel
 
@@ -40,6 +41,51 @@ data class Settings(
      * otherwise check a manifest that does not exist yet.
      */
     val updateChannel: UpdateChannel,
+    /** The Chromecast receiver and its four options. See [CastSettings]. */
+    val cast: CastSettings = CastSettings(),
+)
+
+/**
+ * The Chromecast receiver: this phone shows up as a Cast device, and what is
+ * cast to it is played on an AirPlay receiver.
+ *
+ * Off by default, and so is running in the background: a receiver that
+ * listens on the network the moment the app is installed would be a surprise.
+ */
+data class CastSettings(
+    /** Advertise and accept Cast senders at all. */
+    val enabled: Boolean = false,
+    /**
+     * Keep the receiver running in a foreground service after the app is
+     * closed, and start it again after a reboot. Off: it runs while the app is
+     * on screen, and for as long as a cast it accepted is still playing.
+     */
+    val keepRunning: Boolean = false,
+    /**
+     * Ask which AirPlay receiver to play on each time a sender connects. Off: the
+     * last one chosen is used without asking, as long as it can be found.
+     */
+    val askForDevice: Boolean = true,
+    /**
+     * Convert what AirPlay cannot play (WebM, Matroska, Ogg, FLAC...) on the
+     * phone into HLS. Off: every URL is handed over as it is.
+     */
+    val convertFormats: Boolean = true,
+    /**
+     * Accept senders on this phone only. On by default: a Cast receiver has no
+     * authentication of its own, so anyone on the Wi-Fi could otherwise play on
+     * whatever this phone forwards to.
+     */
+    val localOnly: Boolean = true,
+)
+
+/** The receiver casts went to last, remembered so the next cast can go there without asking. */
+data class CastTarget(
+    val key: String,
+    val name: String,
+    /** Where it was last reached, for one discovery cannot find again (added by address). */
+    val host: String?,
+    val port: Int?,
 )
 
 /**
@@ -53,7 +99,15 @@ class SettingsStore(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    private val _state = MutableStateFlow(read())
+    /**
+     * One state for the whole process, however many stores are made. The
+     * activities and services each make their own, and the Cast receiver runs
+     * for hours in a service: a per-instance state would never see a switch
+     * flipped on the settings screen.
+     */
+    private val _state: MutableStateFlow<Settings> = synchronized(Companion) {
+        shared ?: MutableStateFlow(read()).also { shared = it }
+    }
     val state: StateFlow<Settings> = _state.asStateFlow()
 
     /**
@@ -91,6 +145,43 @@ class SettingsStore(context: Context) {
         _state.value = _state.value.copy(updateChannel = channel)
     }
 
+    fun setCastEnabled(enabled: Boolean) = updateCast(KEY_CAST_ENABLED, enabled) { copy(enabled = enabled) }
+
+    fun setCastKeepRunning(enabled: Boolean) = updateCast(KEY_CAST_KEEP_RUNNING, enabled) { copy(keepRunning = enabled) }
+
+    fun setCastAskForDevice(enabled: Boolean) = updateCast(KEY_CAST_ASK, enabled) { copy(askForDevice = enabled) }
+
+    fun setCastConvertFormats(enabled: Boolean) = updateCast(KEY_CAST_CONVERT, enabled) { copy(convertFormats = enabled) }
+
+    fun setCastLocalOnly(enabled: Boolean) = updateCast(KEY_CAST_LOCAL_ONLY, enabled) { copy(localOnly = enabled) }
+
+    private fun updateCast(key: String, value: Boolean, change: CastSettings.() -> CastSettings) {
+        val next = _state.value.cast.change()
+        if (next == _state.value.cast) return
+        prefs.edit { putBoolean(key, value) }
+        _state.update { it.copy(cast = next) }
+    }
+
+    /** The receiver casts go to without asking, or null before one was ever chosen. */
+    fun castTarget(): CastTarget? {
+        val key = prefs.getString(KEY_CAST_TARGET_KEY, null) ?: return null
+        return CastTarget(
+            key = key,
+            name = prefs.getString(KEY_CAST_TARGET_NAME, null) ?: key,
+            host = prefs.getString(KEY_CAST_TARGET_HOST, null),
+            port = prefs.getInt(KEY_CAST_TARGET_PORT, -1).takeIf { it > 0 },
+        )
+    }
+
+    fun setCastTarget(target: CastTarget) {
+        prefs.edit {
+            putString(KEY_CAST_TARGET_KEY, target.key)
+            putString(KEY_CAST_TARGET_NAME, target.name)
+            if (target.host != null) putString(KEY_CAST_TARGET_HOST, target.host) else remove(KEY_CAST_TARGET_HOST)
+            if (target.port != null) putInt(KEY_CAST_TARGET_PORT, target.port) else remove(KEY_CAST_TARGET_PORT)
+        }
+    }
+
     /** The client name alone, for callers that run off the main thread. */
     fun clientName(): String = _state.value.clientName
 
@@ -110,6 +201,15 @@ class SettingsStore(context: Context) {
         updateChannel = prefs.getString(KEY_UPDATE_CHANNEL, null)
             ?.let { runCatching { UpdateChannel.valueOf(it) }.getOrNull() }
             ?: UpdateChannel.OFF,
+        cast = CastSettings().let { defaults ->
+            CastSettings(
+                enabled = prefs.getBoolean(KEY_CAST_ENABLED, defaults.enabled),
+                keepRunning = prefs.getBoolean(KEY_CAST_KEEP_RUNNING, defaults.keepRunning),
+                askForDevice = prefs.getBoolean(KEY_CAST_ASK, defaults.askForDevice),
+                convertFormats = prefs.getBoolean(KEY_CAST_CONVERT, defaults.convertFormats),
+                localOnly = prefs.getBoolean(KEY_CAST_LOCAL_ONLY, defaults.localOnly),
+            )
+        },
     )
 
     companion object {
@@ -118,6 +218,17 @@ class SettingsStore(context: Context) {
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_LEGACY_KEY = "default_legacy_key_seed"
         private const val KEY_UPDATE_CHANNEL = "update_channel"
+        private const val KEY_CAST_ENABLED = "cast_enabled"
+        private const val KEY_CAST_KEEP_RUNNING = "cast_keep_running"
+        private const val KEY_CAST_ASK = "cast_ask_for_device"
+        private const val KEY_CAST_CONVERT = "cast_convert_formats"
+        private const val KEY_CAST_LOCAL_ONLY = "cast_local_only"
+        private const val KEY_CAST_TARGET_KEY = "cast_target_key"
+        private const val KEY_CAST_TARGET_NAME = "cast_target_name"
+        private const val KEY_CAST_TARGET_HOST = "cast_target_host"
+        private const val KEY_CAST_TARGET_PORT = "cast_target_port"
+
+        @Volatile private var shared: MutableStateFlow<Settings>? = null
 
         /** Long enough for any real device name, short enough for a SETUP body. */
         const val MAX_NAME_LENGTH = 64

@@ -12,6 +12,7 @@ Package id: `tw.avianjay.airplaydroid`
 |---|---|
 | ✅ **Sender** | Android → Apple TV. HomePod / AirPlay speakers: not yet (no audio-only path). |
 | ❌ **Receiver** | This app does *not* make your phone an AirPlay target. |
+| ⚠️ **Chromecast receiver (bridge)** | Optional, off by default: the phone shows up as a Cast device and forwards what is cast to it to an AirPlay receiver, converting formats AirPlay cannot play. The Cast side is verified against two real senders from a PC; the Android side is built but not yet run on a device. Senders built on Google's Cast SDK refuse it. See [Chromecast receiver](#chromecast-receiver-cast--airplay). |
 | ✅ **Screen mirroring, AirPlay 2** | Picture **and** sound, to an Apple TV on tvOS 26.6. **No FairPlay** — this path derives the video key from the pair-verify secret. Verified on one unit. |
 | ✅ **Screen mirroring, legacy (AirPlay 1)** | Picture, no sound, via FairPlay + RTSP type 110. Seen on **LonelyScreen** (from the app in an Android emulator, and from a PC probe) and **iPhoneMirror** (PC probe). Not yet run from a real phone or on a hardware dongle. See [docs/legacy-airplay-notes.md](docs/legacy-airplay-notes.md). |
 | ⚠️ **Video-URL handoff** | `POST /play` with Digest. Accepted (200) by an AirPlay 2 Apple TV, but playback does not start there; not yet tested on an AirPlay 1 receiver. |
@@ -193,7 +194,112 @@ The picker's ⋮ menu holds **Add by address** and **Settings**.
 | **Keep the screen awake while mirroring** | On by default. `MediaProjection` keeps capturing while the screen sleeps, but the encoder's surface stops producing frames and the receiver freezes on the last one. Sets `FLAG_KEEP_SCREEN_ON` for the length of a session only. |
 | **Default legacy video key** | The app-wide fallback for the per-receiver `KeySeed`. A receiver with its own choice, set from its row menu, still wins. |
 | **Update channel** | Off by default. *Stable* offers tagged releases, *Nightly* also offers pre-releases. See [App updates](#app-updates). |
+| **Chromecast receiver** | Five switches, all described in [Chromecast receiver](#chromecast-receiver-cast--airplay). |
 | **Diagnostics** | Where the session log is, and the `run-as` command that reads it. |
+
+## Chromecast receiver (Cast → AirPlay)
+
+**Settings → Chromecast receiver.** The phone advertises itself as a Cast
+device (`_googlecast._tcp`), accepts Cast v2 senders, and plays what they cast
+on an AirPlay receiver through the video-URL handoff (`POST /play`, the same
+session as **Play video URL…**). The Cast side lives in `:protocol` (`cast/`),
+with no `android.*`, so it runs and is tested on a desktop JVM.
+
+| Switch | Default | Effect |
+|---|---|---|
+| **Act as a Chromecast** | off | Advertise and accept senders at all. |
+| **Keep running in the background** | off | A `connectedDevice` foreground service, with its notification, that outlives the app and is started again after a reboot or an app update. Off: the receiver runs while one of the app's screens is on, and until a cast it accepted ends. |
+| **Ask which receiver to play on** | on | A chooser over the sender app each time a sender connects. Off: casts go to the receiver chosen last, found by discovery or at the address it was last reached at. |
+| **Convert formats AirPlay cannot play** | on | WebM, Matroska, Ogg, FLAC and the like are re-encoded on the phone to H.264 + AAC and served as HLS. Off: every URL is handed over as it is. |
+| **Only allow apps on this phone** | on | Connections from any address that is not the phone's own are closed before the TLS handshake. |
+
+### Which senders can use it
+
+**Senders built on Google's Cast SDK will not connect**: Chrome, YouTube and
+nearly every streaming app on Android and iOS. The SDK asks the receiver to sign
+a challenge with a device key whose certificate chains to Google's Cast root,
+and checks the chain. This receiver signs with its own self-signed key, because
+that is the only key it honestly has, so the SDK drops it. No setting in any
+app can change that; it is the SDK's decision, not the protocol's.
+
+Senders that do not check the chain connect: **VLC** and **pychromecast** were
+tested; BubbleUPnP and other open implementations should behave the same, but
+were not tried.
+
+### How a LOAD reaches the AirPlay receiver
+
+`AirPlayFormats.route` decides, from the URL and the content type the sender
+declared:
+
+| Route | When | What the receiver is given |
+|---|---|---|
+| Direct | A format AirPlay plays (MP4/MOV, HLS, MPEG-TS, MP3/AAC) | The sender's URL. |
+| Proxy | The URL names the phone's loopback (`127.0.0.1`, `localhost`) | A URL on the phone's media server that relays it, Range requests included. This is what an app on the phone casting its own files needs, since it serves them on loopback and the receiver cannot reach that. |
+| Convert | Any other audio or video format, with the switch on | An HLS playlist the phone produces as it plays. |
+| — | DASH or Smooth Streaming | Handed over as it is, and will fail: `MediaExtractor` cannot open an adaptive manifest, so there is nothing to convert. |
+
+A LOAD whose content is not an http(s) URL at all -- the sign of an app with a
+receiver of its own and an id only that receiver understands -- is refused
+with `LOAD_FAILED`.
+
+### Conversion
+
+`MediaExtractor` → decoders → (video) OpenGL → H.264 encoder, (audio) PCM →
+AAC encoder → MPEG-TS segments → a live HLS playlist on the phone's media
+server. Anything the phone can decode can be converted.
+
+- **OpenGL between decoder and encoder**, not a shared surface: it scales the
+  picture into the encoder's size (at most 1920×1080) and turns a rotated phone
+  video upright, since players ignore a rotation tag once it is in a transport
+  stream.
+- **No B-frames** and PTS only: the transport stream carries presentation
+  order.
+- **A sliding-window playlist with back-pressure**: the converter blocks when it
+  is five segments ahead of what the receiver has fetched, and segments the
+  receiver has moved past are dropped, so a phone that converts faster than
+  real time never holds a whole film in memory. `EXT-X-START:TIME-OFFSET=0`
+  makes the player begin at the first segment rather than at the live edge.
+- **Seeking** in a converted stream restarts the conversion at the new
+  position; the position reported to the sender adds that offset back.
+
+### The chooser
+
+Android does not let an app start an activity from the background. The chooser
+opens over the sender app only when the user has granted **display over other
+apps** (the settings row links to it), or while one of this app's screens is
+showing. Otherwise a heads-up notification asks, and tapping it opens the same
+chooser. The chooser is a translucent activity in a task of its own
+(`taskAffinity=""`), so it appears over the sender rather than bringing this
+app's picker forward.
+
+### "Only this phone" is not "loopback only"
+
+An app on the phone finds the receiver through mDNS, which advertises the
+Wi-Fi address, so its connection arrives **from** that Wi-Fi address, not from
+`127.0.0.1`. `LocalAddresses.isOwnAddress` therefore accepts loopback and any
+address bound to one of the phone's interfaces, and nothing else. The receiver
+is still advertised to the whole network, because mDNS cannot be limited to one
+host; other devices see it and are refused.
+
+### What is verified, and what is not
+
+- **Cast protocol**: the hand-written protobuf is pinned to bytes produced by
+  the real one (`cast_channel_pb2`, as pychromecast ships it). End to end, the
+  receiver running on a PC (`CastReceiverProbe`) was driven by **pychromecast**
+  (connect, launch, load, pause, seek, play, stop, quit) and by **VLC 3**
+  (launch, joining a session left running, loading a VP9 WebM it served itself,
+  stop). The device-auth reply parses as a real `DeviceAuthMessage` and its
+  signature verifies over `nonce || TLS certificate`.
+- **HLS output**: `HlsMuxProbe` feeds a 600-frame H.264 file and an AAC tone
+  through the same `HlsStream` the app uses; ffmpeg reads all 600 pictures and
+  859 AAC frames back with no timestamp gaps.
+- **Not verified**: none of the Android half has run on a device yet -- the
+  service, the mDNS advertisement, the chooser and the MediaCodec converter
+  are compiled and lint-clean, nothing more. And no receiver on hand could test
+  the last step: LonelyScreen never answers an HTTP `/play`, iPhoneMirror never
+  answers `/reverse`, and the Apple TV accepts `/play` without starting
+  playback (see [Video-URL handoff](#video-url-handoff-airplay-1)). The bridge
+  can only be as good as that handoff.
 
 ## App updates
 
@@ -390,15 +496,28 @@ since they are read by whoever debugs a session, not shown on screen.
     that decides which release is offered. No `android.*`, so the decision that
     matters -- *is this an upgrade?* -- is tested in milliseconds rather than on a
     device.
+  - `cast/`: the Chromecast receiver -- the `CastMessage` framing and a
+    hand-written protobuf for it, device auth, the receiver and media
+    namespaces (`CastReceiver`), the TLS listener (`CastServer`) and its
+    self-signed identity.
+  - `media/`: what the phone serves an AirPlay receiver -- the MPEG-TS writer,
+    the live `HlsStream`, `MediaHttpServer` (HLS and the loopback proxy) and the
+    route decision in `AirPlayFormats`.
 - **`:app`**: Compose UI, `NsdManager` discovery (only while a screen that lists
-  devices is on screen; there is no background discovery service), and the
-  mirroring pipeline. The two such screens are `MainActivity`, the picker, and
-  `CastPopupActivity`, the Quick Settings popup; both extend `MirrorHostActivity`,
+  devices is on screen, plus one bounded round when the Chromecast receiver looks
+  for the AirPlay receiver it forwards to without asking; there is no background
+  discovery service), and the mirroring pipeline. The screens are `MainActivity`,
+  the picker, `CastPopupActivity`, the Quick Settings popup, and
+  `CastTargetActivity`, the Cast chooser; all extend `MirrorHostActivity`,
   which owns the one way a session may be started (claim the controller, collect
   the audio permission, ask for capture consent). The pipeline is `MirrorService`,
   a mediaProjection foreground service, which runs `ScreenEncoder`
   (VirtualDisplay → MediaCodec) and `AudioCapture` (AudioPlaybackCapture).
-  `CastTileService` is the Quick Settings tile. Pairings are kept in
+  `CastTileService` is the Quick Settings tile. `cast/` is the Chromecast
+  bridge: `CastReceiverService` (the foreground service and its mDNS
+  advertisement), `CastReceiverController` (when it runs), `CastBridge` (Cast
+  commands to `PlaybackController`, and status back) and `MediaConverter` (the
+  MediaCodec pipeline); `CastTargetActivity` is its chooser. Pairings are kept in
   `PairingStore`. `update/` is the network half of the updater: fetch, verify,
   hand to the installer.
 
@@ -426,6 +545,11 @@ first**, and reading it backwards silently misreads every capability.
 - ✅ **In-app updater**, off by default: stable and nightly channels, SHA-256
   checked downloads, handed to Android's installer. Tagged releases open a
   **draft** GitHub release. See [App updates](#app-updates).
+- ⚠️ **Chromecast receiver**, off by default: Cast senders that do not insist on
+  Google-signed hardware cast to the phone, which forwards to AirPlay and
+  converts what AirPlay cannot play. Protocol verified with pychromecast and VLC
+  from a PC; not yet run on a device. See
+  [Chromecast receiver](#chromecast-receiver-cast--airplay).
 - ⬜ Mirroring to receivers that use an on-screen PIN (`flags` bit 9) or transient
   pairing.
 - ⬜ `/play` inside the encrypted channel for AirPlay 2 receivers.

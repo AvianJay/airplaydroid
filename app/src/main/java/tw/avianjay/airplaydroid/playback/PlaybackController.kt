@@ -90,10 +90,21 @@ object PlaybackController {
     private var pendingChallenge: LegacyPairing.Challenge? = null
     private var pendingDevice: AirPlayDevice? = null
     private var pendingUrl: String = ""
+    private var pendingStart: Double = 0.0
     private var pendingEvents: AirPlayEventChannel? = null
     private var pendingSessionId: String = ""
 
-    fun play(context: Context, device: AirPlayDevice, url: String, password: String? = null) {
+    /**
+     * Hands [url] to [device]. [startSeconds] is where playback begins -- what a
+     * Cast sender asks for when it resumes a video part-way through.
+     */
+    fun play(
+        context: Context,
+        device: AirPlayDevice,
+        url: String,
+        password: String? = null,
+        startSeconds: Double = 0.0,
+    ) {
         val appContext = context.applicationContext
         val trimmed = url.trim()
         if (trimmed.isEmpty()) {
@@ -152,6 +163,7 @@ object PlaybackController {
                     pendingChallenge = challenge
                     pendingDevice = device
                     pendingUrl = trimmed
+                    pendingStart = startSeconds
                     pendingEvents = events
                     pendingSessionId = sid
 
@@ -174,7 +186,7 @@ object PlaybackController {
                 )
                 ensureActive()
 
-                opened.play(trimmed)
+                opened.play(trimmed, startSeconds)
                 // Real senders send /rate unconditionally after /play: several
                 // receivers load the URL but stay paused until told to play.
                 opened.rate(1.0)
@@ -210,9 +222,11 @@ object PlaybackController {
         }
     }
 
-    fun togglePlayPause(context: Context) {
-        val resume = !_state.value.isPlaying
-        runCommand(context, R.string.playback_error_rate) { it.rate(if (resume) 1.0 else 0.0) }
+    fun togglePlayPause(context: Context) = setPlaying(context, !_state.value.isPlaying)
+
+    /** Plays or pauses outright, for a caller that knows which it wants rather than toggling. */
+    fun setPlaying(context: Context, playing: Boolean) {
+        runCommand(context, R.string.playback_error_rate) { it.rate(if (playing) 1.0 else 0.0) }
     }
 
     fun seekTo(context: Context, positionSeconds: Double) {
@@ -239,6 +253,7 @@ object PlaybackController {
         val challenge = pendingChallenge ?: return
         val device = pendingDevice ?: return
         val url = pendingUrl
+        val start = pendingStart
         val events = pendingEvents
         val sid = pendingSessionId
         clearPending()
@@ -258,7 +273,7 @@ object PlaybackController {
                 Log.i(TAG, "PAIRED. shared secret " + (k?.size ?: 0) + " bytes")
 
                 val opened = AirPlayV1Session(conn, sid, null, events)
-                opened.play(url)
+                opened.play(url, start)
                 opened.rate(1.0)
 
                 val adopted = lock.withLock {
@@ -294,7 +309,7 @@ object PlaybackController {
 
     private fun clearPending() {
         pendingConnection = null; pendingPairing = null; pendingChallenge = null
-        pendingDevice = null; pendingUrl = ""; pendingEvents = null; pendingSessionId = ""
+        pendingDevice = null; pendingUrl = ""; pendingStart = 0.0; pendingEvents = null; pendingSessionId = ""
     }
 
     fun dismissError() {

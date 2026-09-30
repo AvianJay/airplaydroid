@@ -233,7 +233,7 @@ private fun PopupMirrorBar(mirror: MirrorUiState, onStop: () -> Unit) {
  * would have to be anchored to something that is not ours.
  */
 @Composable
-private fun PopupError(message: String) {
+internal fun PopupError(message: String) {
     Text(
         text = message,
         style = MaterialTheme.typography.bodySmall,
@@ -247,7 +247,7 @@ private fun PopupError(message: String) {
  * Also where the discovery diagnostics live, in the picker's own words.
  */
 @Composable
-private fun PopupEmptyState(state: DiscoveryUiState, error: String?) {
+internal fun PopupEmptyState(state: DiscoveryUiState, error: String?) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -280,7 +280,7 @@ private fun PopupEmptyState(state: DiscoveryUiState, error: String?) {
 
 /** Sized to sit where a 24 dp icon would. */
 @Composable
-private fun PopupSpinner() {
+internal fun PopupSpinner() {
     Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }

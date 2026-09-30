@@ -18,6 +18,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
+import tw.avianjay.airplaydroid.cast.CastReceiverController
 import tw.avianjay.airplaydroid.discovery.DiscoveryRepository
 import tw.avianjay.airplaydroid.discovery.NsdDeviceDiscovery
 import tw.avianjay.airplaydroid.mirror.LegacyVideoKeyStore
@@ -38,6 +39,10 @@ import tw.avianjay.airplaydroid.settings.SettingsStore
  * only be started one way, or the two would drift: the popup would forget the
  * audio-permission step, or ask for consent before checking whether a session is
  * already running, and the failure would look like a receiver problem.
+ *
+ * The Cast chooser ([tw.avianjay.airplaydroid.CastTargetActivity]) is a host
+ * too, for the discovery and the stores rather than to mirror; and every host
+ * counts towards keeping the Chromecast receiver up while the app is on screen.
  */
 abstract class MirrorHostActivity : ComponentActivity() {
 
@@ -75,6 +80,20 @@ abstract class MirrorHostActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (edgeToEdge) enableEdgeToEdge()
+    }
+
+    /**
+     * The Chromecast receiver, when it is not set to keep running, runs while
+     * one of these screens is on: every host counts itself in and out.
+     */
+    override fun onStart() {
+        super.onStart()
+        CastReceiverController.onHostStarted(this)
+    }
+
+    override fun onStop() {
+        CastReceiverController.onHostStopped(this)
+        super.onStop()
     }
 
     /**

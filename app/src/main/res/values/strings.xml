@@ -170,4 +170,50 @@
     <string name="tile_label">Cast screen</string>
     <string name="tile_subtitle_idle">Tap to choose a receiver</string>
     <string name="tile_subtitle_active">Mirroring</string>
+    <!-- The Chromecast receiver: this phone as a Cast device, forwarding to AirPlay. -->
+    <string name="settings_cast_title">Chromecast receiver</string>
+    <string name="settings_cast_body">Lets apps cast to this phone as if it were a Chromecast, and plays what they cast on an AirPlay receiver. Senders built on Google\'s Cast SDK (YouTube, Chrome and most streaming apps) check that a receiver is genuine Google hardware and will not connect; open senders such as VLC and BubbleUPnP do.</string>
+    <string name="settings_cast_enabled_title">Act as a Chromecast</string>
+    <string name="settings_cast_enabled_body">Off. Senders on this phone or network will not see it.</string>
+    <string name="settings_cast_status_starting">Starting…</string>
+    <string name="settings_cast_status_listening">Listening on port %1$d.</string>
+    <!-- %1$s: why, in the platform's own (English) words. -->
+    <string name="settings_cast_status_failed">Could not start: %1$s</string>
+    <string name="settings_cast_keep_running_title">Keep running in the background</string>
+    <string name="settings_cast_keep_running_body">Stays available with the app closed, and starts again after a restart, with a notification while it runs. Off: available while the app is open, and until a cast it accepted ends.</string>
+    <string name="settings_cast_ask_title">Ask which receiver to play on</string>
+    <string name="settings_cast_ask_body">Shows the AirPlay receivers each time a sender connects. Off: casts go to the receiver chosen last.</string>
+    <string name="settings_cast_overlay_body">To open over the app that is casting, the chooser needs permission to display over other apps. Without it, a notification asks instead.</string>
+    <string name="settings_cast_overlay_allow">Allow display over other apps</string>
+    <string name="settings_cast_convert_title">Convert formats AirPlay cannot play</string>
+    <string name="settings_cast_convert_body">WebM, Matroska, Ogg, FLAC and the like are re-encoded on this phone to H.264 and AAC while they play. Uses the CPU and battery; DASH cannot be converted.</string>
+    <string name="settings_cast_local_only_title">Only allow apps on this phone</string>
+    <string name="settings_cast_local_only_body_on">Other devices on the network can see the receiver but are refused.</string>
+    <string name="settings_cast_local_only_body_off">Anyone on this network can cast through this phone to your AirPlay receivers.</string>
+
+    <string name="cast_channel_name">Chromecast receiver</string>
+    <string name="cast_request_channel_name">Cast requests</string>
+    <string name="cast_notification_title">Chromecast receiver on</string>
+    <string name="cast_notification_choosing">A sender is waiting for you to choose a receiver</string>
+    <!-- %1$s: what is playing; %2$s: the AirPlay receiver. -->
+    <string name="cast_notification_casting">Casting %1$s to %2$s</string>
+    <string name="cast_untitled">media</string>
+    <!-- %1$s: the name senders see, which is the client name. -->
+    <string name="cast_notification_body">Senders on this network see this phone as %1$s.</string>
+    <string name="cast_notification_body_local">Apps on this phone see it as %1$s.</string>
+    <string name="cast_action_stop">Stop casting</string>
+    <string name="cast_action_turn_off">Turn off</string>
+    <string name="cast_request_title">Choose where to play</string>
+    <string name="cast_request_body">A sender is casting to this phone. Tap to pick an AirPlay receiver.</string>
+    <string name="cast_request_body_titled">Tap to pick an AirPlay receiver for %1$s.</string>
+
+    <string name="cast_chooser_title">Play on AirPlay</string>
+    <string name="cast_chooser_subtitle">A sender is casting to this phone</string>
+    <string name="cast_chooser_subtitle_titled">Casting %1$s</string>
+    <string name="cast_chooser_cancel">Cancel cast</string>
+    <string name="cast_status_converting">Converting for AirPlay…</string>
+    <string name="cast_password_title">Play on %1$s</string>
+    <string name="cast_error_target_missing">%1$s, the receiver casts went to last, could not be found.</string>
+    <!-- %1$s: the converter's own (English) explanation. -->
+    <string name="cast_error_convert">Could not convert this media: %1$s</string>
 </resources>
