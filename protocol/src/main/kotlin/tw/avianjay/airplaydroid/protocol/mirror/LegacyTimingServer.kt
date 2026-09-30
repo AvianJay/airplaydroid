@@ -68,10 +68,13 @@ class LegacyTimingServer(preferredPort: Int = PREFERRED_PORT) : Closeable {
                         buffer.copyOf(minOf(packet.length, 16)).joinToString("") { "%02x".format(it) }
                     continue
                 }
-                runCatching {
-                    socket.send(DatagramPacket(reply, reply.size, packet.socketAddress))
-                    answered.incrementAndGet()
-                }
+                // Counted before the send, not after: once the asker has the
+                // reply, the count must already include it. Counting afterwards
+                // let a reader that had just received the reply see the old
+                // count -- the race that failed LegacyTimingServerTest on CI.
+                answered.incrementAndGet()
+                runCatching { socket.send(DatagramPacket(reply, reply.size, packet.socketAddress)) }
+                    .onFailure { answered.decrementAndGet() }
             }
         }
     }
